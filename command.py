@@ -360,12 +360,12 @@ class UnpackProcessChunksCommand(Command):
             # Get chunks that need unpacking
             if namespace:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE namespace = ? AND chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL",
+                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE namespace = ? AND chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL ORDER BY chunk_name ASC",
                     (namespace,)
                 )
             else:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL"
+                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL ORDER BY namespace ASC, chunk_name ASC"
                 )
             
             chunks_to_unpack = cursor.fetchall()
