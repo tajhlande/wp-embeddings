@@ -115,6 +115,7 @@ def download_chunk(api_client: Client,
         with open(chunk_file_path, "wb") as f:
             f.write(chunk_data)
         logger.info("Chunk data saved to downloaded_chunk.tar.gz")
+
     except Exception as e:
         logger.exception(f"Failed to download chunk data: {e}")
         return
@@ -159,7 +160,7 @@ def extract_single_file_from_tar_gz(tar_gz_path: str, extract_to: str='.'):
 # if extracted_file:
 #     print(f"Successfully extracted: {extracted_file}")
 
-def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_path: str):
+def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_path: str) -> int:
     """
     Parse the extracted chunk file to read its contents.
     
@@ -187,11 +188,12 @@ def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_pa
                 #logger.debug(f"Extracted page data: {json.dumps(page_data_extract, indent=2)}")
                 logger.debug(f"Processing page on line {line_number}. Page ID: {page_data_extract['page_id']}, Page title: {page_data_extract['title']}")
                 upsert_new_page_data(page_data_extract, sqlconn)
-                
+        return line_number
                   
                 
     except Exception as e:
         logger.exception(f"Error parsing chunk file: {e}")
+        raise
        
  
 
@@ -267,6 +269,27 @@ def process_one_chunk():
         sqlconn = get_sql_conn()
         parse_chunk_file(sqlconn, chunk_name, os.path.join(extracted_chunk_path, extracted_file_name))
 
+def get_chunk_info_for_namespace(namespace: str, api_client: Client, sqlconn: sqlite3.Connection):
+    logger.info(f"Fetching chunk metadata for namespace: {namespace}")
+    request = Request(
+        filters=[Filter(field="in_language.identifier", value="en")]
+    )
+    chunk_data_list: list[dict] = api_client.get_chunks(namespace, request)
+    for chunk_data in chunk_data_list:
+        #logger.info(f"Found chunk: {json.dumps(chunk_data)}")
+        chunk_name = chunk_data.get('identifier')
+        if chunk_name:
+            upsert_new_chunk_data(chunk_name, namespace, sqlconn)
+        else:
+            logger.warning(f"Chunk data without a name field: {json.dumps(chunk_data)}")
+    logger.info(f"Total chunks found: {len(chunk_data_list)}")
+
 if __name__ == "__main__":
-    ensure_tables(get_sql_conn())
-    process_one_chunk()
+    sqlconn = get_sql_conn()
+    ensure_tables(sqlconn)
+    #process_one_chunk()
+    auth_client, refresh_token, access_token = get_enterprise_auth_client()
+
+    with revoke_token_on_exit(auth_client, refresh_token):
+        api_client = get_enterprise_api_client(access_token)
+        get_chunk_info_for_namespace("enwiki_namespace_0", api_client, sqlconn)

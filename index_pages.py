@@ -93,12 +93,18 @@ def timer():
     start_time = time.perf_counter()
     yield lambda: time.perf_counter() - start_time
 
-def compute_embeddings_for_chunk(chunk_name: str, embedding_function: EmbeddingFunction, sqlconn: sqlite3.Connection) -> None:
+def compute_embeddings_for_chunk(chunk_name: str, embedding_function: EmbeddingFunction, sqlconn: sqlite3.Connection, limit: int = None) -> None:
 
     logger.info("Computing embeddings for chunk %s", chunk_name)
     with timer() as elapsed:
         page_id_list = get_page_ids_needing_embedding_for_chunk(chunk_name, sqlconn)
         logger.info("Found %d pages needing embeddings in chunk %s", len(page_id_list), chunk_name)
+        
+        # Apply limit if specified
+        if limit and limit < len(page_id_list):
+            page_id_list = page_id_list[:limit]
+            logger.info("Processing first %d pages (limit applied)", limit)
+        
         counter = 0
         for page_id in page_id_list:
             page_data = get_page_by_id(page_id, sqlconn)

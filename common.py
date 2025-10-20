@@ -130,11 +130,12 @@ def upsert_new_page_data(page_data: dict, sqlconn: sqlite3.Connection) -> None:
         logger.error(f"Failed to upsert page data for page {page_data.get('page_id')}: {e}")
         raise
 
-def upsert_new_chunk_data(chunk_name: str, namespace: str, sqlconn: sqlite3.Connection) -> None:
+def upsert_new_chunk_data(chunk_name: str, namespace: str, sqlconn: sqlite3.Connection) -> dict:
     upsert_sql = """
-        INSERT INTO chunk_log(chunk_name, namespace) VALUES(:chunk_name, :namespace)
-        ON CONFLICT(chunk_name) DO UPDATE 
-        SET chunk_name = :chunk_name, downloaded_at = NULL, completed_at = NULL;
+        INSERT INTO chunk_log(chunk_name, namespace, downloaded_at, completed_at)
+          VALUES(:chunk_name, :namespace, NULL, NULL)
+          ON CONFLICT(chunk_name) DO UPDATE 
+          SET chunk_name = :chunk_name, downloaded_at = NULL, completed_at = NULL;
         """
     try:
         cursor = sqlconn.cursor()
@@ -147,6 +148,58 @@ def upsert_new_chunk_data(chunk_name: str, namespace: str, sqlconn: sqlite3.Conn
             logger.error(f"Failed to roll back sql transaction while handling another error: {ex}")            
         logger.error(f"Failed to upsert chunk info for chunk {chunk_name}: {e}")
         raise
+    return {
+        'chunk_name': chunk_name,
+        'namespace': namespace,
+        'downloaded_at': None,
+        'completed_at': None,
+        'chunk_archive_path': None,
+        'chunk_extracted_path': None
+    }
+
+def update_chunk_data(chunk_data: dict, sqlconn: sqlite3.Connection) -> None:
+    update_sql = """
+        UPDATE chunk_log 
+        SET chunk_archive_path = :chunk_archive_path,
+            chunk_extracted_path = :chunk_extracted_path,
+            downloaded_at = :downloaded_at,
+            completed_at = :completed_at
+        WHERE chunk_name = :chunk_name
+        """
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(update_sql, chunk_data)
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as ex:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {ex}")            
+        logger.error(f"Failed to update chunk data for chunk {chunk_data.get('chunk_name')}: {e}")
+        raise
+
+def get_chunk_data(chunk_name: str, sqlconn: sqlite3.Connection) -> dict:
+    select_sql = """
+        SELECT chunk_name, namespace, chunk_archive_path, chunk_extracted_path, downloaded_at, completed_at
+        FROM chunk_log
+        WHERE chunk_name = :chunk_name
+        LIMIT 1
+        """
+    cursor = sqlconn.execute(select_sql, {'chunk_name': chunk_name}) 
+    row = cursor.fetchone()
+    if row:
+        chunk_data = {
+            'chunk_name': row['chunk_name'],
+            'namespace': row['namespace'],
+            'chunk_archive_path': row['chunk_archive_path'],
+            'chunk_extracted_path': row['chunk_extracted_path'],
+            'downloaded_at': row['downloaded_at'],
+            'completed_at': row['completed_at']
+        }
+    else:
+        logger.warning(f"No chunk found with chunk_name: {chunk_name}")
+        chunk_data = {}
+    return chunk_data
 
 def update_embeddings_for_page(page_data: dict, sqlconn: sqlite3.Connection) -> None:
     # convert numpy arrays to bytes for storage

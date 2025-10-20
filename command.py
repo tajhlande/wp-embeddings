@@ -1,0 +1,723 @@
+import argparse
+import logging
+import os
+import sys
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, Any
+import sqlite3
+
+# Import existing modules
+from common import get_sql_conn, ensure_tables, get_page_ids_needing_embedding_for_chunk
+from download_chunks import get_enterprise_auth_client, get_enterprise_api_client, get_chunk_info_for_namespace, download_chunk as original_download_chunk, extract_single_file_from_tar_gz, parse_chunk_file
+from index_pages import get_embedding_function, compute_embeddings_for_chunk
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+class Command(ABC):
+    """Abstract base class for all commands."""
+    
+    def __init__(self, name: str, description: str, required_args: List[str] = None, optional_args: Dict[str, Any] = None):
+        self.name = name
+        self.description = description
+        self.required_args = required_args or []
+        self.optional_args = optional_args or {}
+    
+    @abstractmethod
+    def execute(self, args: Dict[str, Any]) -> str:
+        """Execute the command with given arguments."""
+        pass
+    
+    def validate(self, args: Dict[str, Any]) -> bool:
+        """Validate command arguments."""
+        # Check required arguments
+        for arg in self.required_args:
+            if arg not in args or args[arg] is None:
+                raise ValueError(f"Missing required argument: {arg}")
+        
+        # Check argument types and values
+        for arg, default_value in self.optional_args.items():
+            if arg in args and args[arg] is not None:
+                # Add specific validation rules here
+                pass
+        
+        return True
+    
+    def get_help(self) -> str:
+        """Get help text for the command."""
+        help_text = f"{self.name}: {self.description}\n"
+        help_text += f"Required arguments: {', '.join(self.required_args) if self.required_args else 'None'}\n"
+        help_text += "Optional arguments:\n"
+        for arg, default in self.optional_args.items():
+            help_text += f"  --{arg} ({type(default).__name__}): Default: {default}\n"
+        return help_text
+
+
+class CommandParser:
+    """Parse user input into command and arguments."""
+    
+    def __init__(self):
+        self.commands = {}
+    
+    def register_command(self, command: Command):
+        """Register a command."""
+        self.commands[command.name] = command
+    
+    def parse_input(self, input_str: str) -> tuple[str, Dict[str, Any]]:
+        """Parse user input into command and arguments."""
+        input_str = input_str.strip()
+        
+        if not input_str:
+            return "", {}
+        
+        # Split into command and arguments
+        parts = input_str.split()
+        if not parts:
+            return "", {}
+        
+        command_name = parts[0].lower()
+        args = {}
+        
+        # Parse arguments
+        for i in range(1, len(parts)):
+            part = parts[i]
+            if part.startswith('--'):
+                # Long argument --value
+                if '=' in part:
+                    key, value = part[2:].split('=', 1)
+                    args[key] = self._convert_value(value)
+                else:
+                    key = part[2:]
+                    # Check if next part is a value
+                    if i + 1 < len(parts) and not parts[i + 1].startswith('--'):
+                        args[key] = self._convert_value(parts[i + 1])
+                        i += 1  # Skip next part as it's been consumed
+                    else:
+                        args[key] = True
+            elif part.startswith('-'):
+                # Short argument -v
+                key = part[1:]
+                if i + 1 < len(parts) and not parts[i + 1].startswith('-'):
+                    args[key] = self._convert_value(parts[i + 1])
+                    i += 1  # Skip next part as it's been consumed
+                else:
+                    args[key] = True
+            else:
+                # Positional argument - treat as value for 'command' argument for help command
+                # or as a positional argument for other commands
+                if command_name == "help":
+                    args["command"] = part
+                else:
+                    # For other commands, we could handle positional arguments here
+                    # For now, just ignore or handle as needed
+                    pass
+        
+        return command_name, args
+    
+    def _convert_value(self, value: str) -> Any:
+        """Convert string value to appropriate type."""
+        if value.lower() in ('true', 'false'):
+            return value.lower() == 'true'
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return value
+    
+    def validate_command(self, command_name: str) -> bool:
+        """Check if command exists."""
+        return command_name in self.commands
+    
+    def get_command_help(self, command_name: str) -> str:
+        """Get help for a specific command."""
+        if command_name in self.commands:
+            return self.commands[command_name].get_help()
+        return f"Unknown command: {command_name}"
+    
+    def get_available_commands(self) -> List[str]:
+        """Get list of available commands."""
+        return list(self.commands.keys())
+
+
+class CommandDispatcher:
+    """Dispatch commands to appropriate command classes."""
+    
+    def __init__(self, parser: CommandParser):
+        self.parser = parser
+        self.api_client = None
+        self.auth_client = None
+        self.refresh_token = None
+        self.access_token = None
+    
+    def _get_api_client(self):
+        """Get or create API client with authentication."""
+        if self.api_client is None:
+            try:
+                self.auth_client, self.refresh_token, self.access_token = get_enterprise_auth_client()
+                self.api_client = get_enterprise_api_client(self.access_token)
+            except Exception as e:
+                logger.error(f"Failed to authenticate: {e}")
+                raise
+        return self.api_client
+    
+    def dispatch(self, command_name: str, args: Dict[str, Any]) -> str:
+        """Dispatch command to appropriate handler."""
+        if not self.parser.validate_command(command_name):
+            return f"Unknown command: {command_name}"
+        
+        try:
+            command = self.parser.commands[command_name]
+            command.validate(args)
+            return command.execute(args)
+        except ValueError as e:
+            return f"Validation error: {e}"
+        except Exception as e:
+            logger.error(f"Error executing command '{command_name}': {e}")
+            return f"Error: {e}"
+
+
+class RefreshChunkDataCommand(Command):
+    """Refresh chunk data for a namespace."""
+    
+    def __init__(self):
+        super().__init__(
+            name="refresh",
+            description="Refresh chunk data for a namespace",
+            required_args=["namespace"],
+            optional_args={}
+        )
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        namespace = args["namespace"]
+        
+        try:
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+            
+            api_client = self._get_api_client()
+            get_chunk_info_for_namespace(namespace, api_client, sqlconn)
+            
+            # Get count of chunks for the namespace
+            cursor = sqlconn.execute(
+                "SELECT COUNT(*) as count FROM chunk_log WHERE namespace = ?",
+                (namespace,)
+            )
+            count = cursor.fetchone()['count']
+            
+            return f"✓ Refreshed chunk data for namespace: {namespace}\nFound {count} chunks in namespace {namespace}"
+        
+        except Exception as e:
+            logger.error(f"Failed to refresh chunk data: {e}")
+            return f"✗ Failed to refresh chunk data: {e}"
+    
+    def _get_api_client(self):
+        """Get or create API client with authentication."""
+        if not hasattr(self, 'api_client') or self.api_client is None:
+            try:
+                auth_client, refresh_token, access_token = get_enterprise_auth_client()
+                self.api_client = get_enterprise_api_client(access_token)
+            except Exception as e:
+                logger.error(f"Failed to authenticate: {e}")
+                raise
+        return self.api_client
+
+
+class DownloadChunksCommand(Command):
+    """Download chunks that haven't been downloaded yet."""
+    
+    def __init__(self):
+        super().__init__(
+            name="download",
+            description="Download chunks that haven't been downloaded yet",
+            required_args=[],
+            optional_args={"limit": 1, "namespace": None}
+        )
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        limit = args.get("limit", 1)
+        namespace = args.get("namespace")
+        
+        try:
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+            
+            # Get chunks that need downloading
+            if namespace:
+                cursor = sqlconn.execute(
+                    "SELECT chunk_name, namespace FROM chunk_log WHERE namespace = ? AND downloaded_at IS NULL LIMIT ?",
+                    (namespace, limit)
+                )
+            else:
+                cursor = sqlconn.execute(
+                    "SELECT chunk_name, namespace FROM chunk_log WHERE downloaded_at IS NULL LIMIT ?",
+                    (limit,)
+                )
+            
+            chunks_to_download = cursor.fetchall()
+            
+            if not chunks_to_download:
+                return "✓ No chunks available for download"
+            
+            api_client = self._get_api_client()
+            downloaded_count = 0
+            
+            for chunk in chunks_to_download:
+                chunk_name = chunk['chunk_name']
+                chunk_namespace = chunk['namespace']
+                
+                try:
+                    # Create download directory
+                    download_dir = f"downloaded/{chunk_namespace}"
+                    os.makedirs(download_dir, exist_ok=True)
+                    
+                    chunk_file_path = f"{download_dir}/{chunk_name}.tar.gz"
+                    
+                    # Download chunk
+                    original_download_chunk(api_client, chunk_namespace, chunk_name, chunk_file_path)
+                    
+                    # Update database
+                    sqlconn.execute(
+                        "UPDATE chunk_log SET chunk_archive_path = ?, downloaded_at = CURRENT_TIMESTAMP WHERE chunk_name = ?",
+                        (chunk_file_path, chunk_name)
+                    )
+                    sqlconn.commit()
+                    
+                    downloaded_count += 1
+                    logger.info(f"Downloaded {chunk_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to download {chunk_name}: {e}")
+                    continue
+            
+            return f"✓ Downloaded {downloaded_count} chunk(s) in namespace {namespace or 'all'}"
+        
+        except Exception as e:
+            logger.error(f"Failed to download chunks: {e}")
+            return f"✗ Failed to download chunks: {e}"
+    
+    def _get_api_client(self):
+        """Get or create API client with authentication."""
+        if not hasattr(self, 'api_client') or self.api_client is None:
+            try:
+                auth_client, refresh_token, access_token = get_enterprise_auth_client()
+                self.api_client = get_enterprise_api_client(access_token)
+            except Exception as e:
+                logger.error(f"Failed to authenticate: {e}")
+                raise
+        return self.api_client
+
+
+class UnpackProcessChunksCommand(Command):
+    """Unpack and process downloaded chunks."""
+    
+    def __init__(self):
+        super().__init__(
+            name="unpack",
+            description="Unpack and process downloaded chunks",
+            required_args=[],
+            optional_args={"namespace": None}
+        )
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        namespace = args.get("namespace")
+        
+        try:
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+            
+            # Get chunks that need unpacking
+            if namespace:
+                cursor = sqlconn.execute(
+                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE namespace = ? AND chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL",
+                    (namespace,)
+                )
+            else:
+                cursor = sqlconn.execute(
+                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL"
+                )
+            
+            chunks_to_unpack = cursor.fetchall()
+            
+            if not chunks_to_unpack:
+                return "✓ No chunks available for unpacking"
+            
+            processed_count = 0
+            total_pages = 0
+            
+            for chunk in chunks_to_unpack:
+                chunk_name = chunk['chunk_name']
+                chunk_namespace = chunk['namespace']
+                archive_path = chunk['chunk_archive_path']
+                
+                try:
+                    # Create extraction directory
+                    extract_dir = f"extracted/{chunk_namespace}"
+                    os.makedirs(extract_dir, exist_ok=True)
+                    
+                    # Extract archive
+                    extracted_file = extract_single_file_from_tar_gz(archive_path, extract_dir)
+                    
+                    if extracted_file:
+                        # Parse chunk file
+                        chunk_file_path = f"{extract_dir}/{extracted_file}"
+                        line_count = parse_chunk_file(sqlconn, chunk_name, chunk_file_path)
+                        
+                        # Update database
+                        sqlconn.execute(
+                            "UPDATE chunk_log SET chunk_extracted_path = ? WHERE chunk_name = ?",
+                            (chunk_file_path, chunk_name)
+                        )
+                        sqlconn.commit()
+                        
+                        # Remove archive file
+                        try:
+                            os.remove(archive_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to remove archive {archive_path}: {e}")
+                        
+                        # Count pages processed
+                        page_cursor = sqlconn.execute(
+                            "SELECT COUNT(*) as count FROM page_log WHERE chunk_name = ?",
+                            (chunk_name,)
+                        )
+                        pages_in_chunk = page_cursor.fetchone()['count']
+                        total_pages += pages_in_chunk
+                        
+                        processed_count += 1
+                        logger.info(f"Unpacked and processed {chunk_name} with {pages_in_chunk} pages")
+                    else:
+                        logger.error(f"Failed to extract {archive_path}")
+                
+                except Exception as e:
+                    logger.error(f"Failed to unpack {chunk_name}: {e}")
+                    continue
+            
+            return f"✓ Unpacked and processed {processed_count} chunk(s)\nProcessed {total_pages} pages from {processed_count} chunks"
+        
+        except Exception as e:
+            logger.error(f"Failed to unpack chunks: {e}")
+            return f"✗ Failed to unpack chunks: {e}"
+
+
+class EmbedPagesCommand(Command):
+    """Process remaining pages for embedding computation."""
+    
+    def __init__(self):
+        super().__init__(
+            name="embed",
+            description="Process remaining pages for embedding computation",
+            required_args=[],
+            optional_args={"chunk": None, "limit": None}
+        )
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        chunk_name = args.get("chunk")
+        limit = args.get("limit")
+        
+        # Validate and convert limit parameter
+        limit_int = None
+        if limit is not None:
+            try:
+                limit_int = int(limit)
+                if limit_int <= 0:
+                    return "✗ Limit must be a positive integer"
+            except ValueError:
+                return "✗ Invalid limit value. Please provide a positive integer."
+        
+        try:
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+            
+            # Setup embedding function
+            embedding_function = get_embedding_function(
+                model_name="jina-embeddings-v4-text-matching-GGUF",
+                openai_compatible_url='http://llmhost1.internal.tajh.house:8080/v1',
+                openai_api_key='no-key-necessary'
+            )
+            
+            if chunk_name:
+                # Process specific chunk
+                page_ids = get_page_ids_needing_embedding_for_chunk(chunk_name, sqlconn)
+                
+                if limit_int:
+                    page_ids = page_ids[:limit_int]
+                
+                if not page_ids:
+                    return f"✓ No pages needing embeddings in chunk {chunk_name}"
+                
+                # Compute embeddings
+                compute_embeddings_for_chunk(chunk_name, embedding_function, sqlconn)
+                
+                return f"✓ Processed {len(page_ids)} pages for chunk {chunk_name}"
+            
+            else:
+                # Process all chunks
+                cursor = sqlconn.execute(
+                    "SELECT DISTINCT chunk_name FROM page_log WHERE embedding_vector IS NULL"
+                )
+                chunks = [row['chunk_name'] for row in cursor.fetchall()]
+                
+                if not chunks:
+                    return "✓ No pages needing embeddings"
+                
+                total_processed = 0
+                
+                for chunk in chunks:
+                    try:
+                        # Check if we have remaining limit capacity
+                        if limit_int and total_processed >= limit_int:
+                            break
+                            
+                        # Get pages needing embeddings for this chunk
+                        page_ids = get_page_ids_needing_embedding_for_chunk(chunk, sqlconn)
+                        
+                        if not page_ids:
+                            continue
+                        
+                        # Calculate how many pages we can process in this chunk
+                        if limit_int:
+                            remaining = limit_int - total_processed
+                            pages_to_process = min(len(page_ids), remaining)
+                        else:
+                            pages_to_process = len(page_ids)
+                        
+                        if pages_to_process > 0:
+                            # Pass the limit to the compute function
+                            compute_embeddings_for_chunk(chunk, embedding_function, sqlconn, limit=pages_to_process)
+                            total_processed += pages_to_process
+                            logger.info(f"Processed {pages_to_process} pages for chunk {chunk}")
+                    
+                    except Exception as e:
+                        logger.error(f"Failed to process chunk {chunk}: {e}")
+                        continue
+                
+                return f"✓ Processed {total_processed} pages across {len(chunks)} chunk(s)"
+        
+        except Exception as e:
+            logger.error(f"Failed to process pages: {e}")
+            return f"✗ Failed to process pages: {e}"
+
+
+class StatusCommand(Command):
+    """Show current system status."""
+    
+    def __init__(self):
+        super().__init__(
+            name="status",
+            description="Show current system status",
+            required_args=[],
+            optional_args={}
+        )
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        try:
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+            
+            # Get chunk statistics
+            chunk_cursor = sqlconn.execute("""
+                SELECT 
+                    COUNT(*) as total_chunks,
+                    SUM(CASE WHEN downloaded_at IS NOT NULL THEN 1 ELSE 0 END) as downloaded_chunks,
+                    SUM(CASE WHEN chunk_extracted_path IS NOT NULL THEN 1 ELSE 0 END) as extracted_chunks
+                FROM chunk_log                     
+            """)
+            chunk_stats = chunk_cursor.fetchone()
+            
+            chunk_completion_cursor = sqlconn.execute(
+                """
+                SELECT SUM(CASE WHEN total_pages > 0 AND pending_embeddings = 0 THEN 1 ELSE 0 END) as "complete_chunks",
+                       SUM(CASE WHEN total_pages = 0 OR pending_embeddings > 0 THEN 1 ELSE 0 END) as "incomplete_chunks",
+                       SUM(pending_embeddings) as "pending_embeddings_count",
+                       SUM(completed_embeddings) as "completed_embeddings_count",
+                       SUM(total_pages) as "total_pages_count" 
+                    FROM (
+                        SELECT chunk_log.chunk_name, 
+                           CASE WHEN SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 1 ELSE 0 END) = 0 AND SUM(page_id) > 0 THEN 1 ELSE 0 END as is_complete,
+                           SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 1 ELSE 0 END) as pending_embeddings,
+                           SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 0 ELSE 1 END) as completed_embeddings,
+                           COUNT(page_log.page_id) as total_pages
+                        FROM chunk_log
+                        LEFT JOIN page_log ON chunk_log.chunk_name = page_log.chunk_name
+                        GROUP BY chunk_log.chunk_name
+                    );
+            """)
+            chunk_completion_stats = chunk_completion_cursor.fetchone()
+
+            # Get page statistics
+            page_cursor = sqlconn.execute("""
+                SELECT 
+                    COUNT(*) as total_pages,
+                    SUM(CASE WHEN embedding_vector IS NOT NULL THEN 1 ELSE 0 END) as pages_with_embeddings
+                FROM page_log
+            """)
+            page_stats = page_cursor.fetchone()
+            
+            status_text = f"System Status:\n"
+            status_text += f"Chunks: {chunk_stats['total_chunks']} total, {chunk_stats['downloaded_chunks']} downloaded, {chunk_stats['extracted_chunks']} extracted\n"
+            status_text += f"Pages: {page_stats['total_pages']} total, {page_stats['pages_with_embeddings']} with embeddings\n"
+            status_text += f"Chunk Completion: {chunk_completion_stats['complete_chunks']} complete, {chunk_completion_stats['incomplete_chunks']} incomplete\n"
+            status_text += f"Page Completion: {chunk_completion_stats['pending_embeddings_count']} pending embeddings, {chunk_completion_stats['completed_embeddings_count']} complete, {chunk_completion_stats['total_pages_count']} total pages.\n"
+            
+            # Get namespace breakdown
+            namespace_cursor = sqlconn.execute("""
+                SELECT namespace, 
+                       COUNT(*) as chunk_count,
+                       SUM(CASE WHEN downloaded_at IS NOT NULL THEN 1 ELSE 0 END) as downloaded_count
+                FROM chunk_log 
+                GROUP BY namespace
+                ORDER BY namespace
+            """)
+            
+            status_text += "\nNamespace breakdown:\n"
+            for row in namespace_cursor.fetchall():
+                status_text += f"  {row['namespace']}: {row['chunk_count']} chunks, {row['downloaded_count']} downloaded\n"
+            
+            return status_text
+        
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+            return f"✗ Failed to get status: {e}"
+
+
+class HelpCommand(Command):
+    """Show help information."""
+    
+    def __init__(self, parser: CommandParser):
+        super().__init__(
+            name="help",
+            description="Show help information",
+            required_args=[],
+            optional_args={"command": None}
+        )
+        self.parser = parser
+    
+    def execute(self, args: Dict[str, Any]) -> str:
+        command_name = args.get("command")
+        
+        if command_name:
+            return self.parser.get_command_help(command_name)
+        else:
+            help_text = "Available commands:\n"
+            for cmd_name in self.parser.get_available_commands():
+                cmd = self.parser.commands[cmd_name]
+                help_text += f"  {cmd_name} - {cmd.description}\n"
+            help_text += "\nUse 'help <command>' for more information about a specific command."
+            return help_text
+
+
+class CommandInterpreter:
+    """Main command interpreter class."""
+    
+    def __init__(self):
+        self.parser = CommandParser()
+        self.dispatcher = CommandDispatcher(self.parser)
+        self._register_commands()
+    
+    def _register_commands(self):
+        """Register all commands."""
+        self.parser.register_command(RefreshChunkDataCommand())
+        self.parser.register_command(DownloadChunksCommand())
+        self.parser.register_command(UnpackProcessChunksCommand())
+        self.parser.register_command(EmbedPagesCommand())
+        self.parser.register_command(StatusCommand())
+        self.parser.register_command(HelpCommand(self.parser))
+    
+    def run_interactive(self):
+        """Run interactive command interpreter."""
+        print("Welcome to wp-snapshot-dl command interpreter!")
+        print("Type 'help' for available commands or 'quit' to exit.")
+        print()
+        
+        while True:
+            try:
+                user_input = input("> ").strip()
+                
+                if not user_input:
+                    continue
+                
+                if user_input.lower() in ('quit', 'exit', 'q'):
+                    print("Goodbye!")
+                    break
+                
+                command_name, args = self.parser.parse_input(user_input)
+                
+                if not command_name:
+                    continue
+                
+                result = self.dispatcher.dispatch(command_name, args)
+                print(result)
+                print()
+                
+            except KeyboardInterrupt:
+                print("\nGoodbye!")
+                break
+            except EOFError:
+                print("\nGoodbye!")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+                logger.error(f"Interactive mode error: {e}")
+    
+    def run_command(self, command_args: List[str]):
+        """Run a single command."""
+        if not command_args:
+            print("Usage: python command.py <command> [options]")
+            return
+        
+        command_name = command_args[0]
+        
+        # Special handling for help command
+        if command_name == "help":
+            # Parse help command manually
+            help_args = {}
+            if len(command_args) > 1:
+                help_args["command"] = command_args[1]
+            
+            help_command = self.parser.commands.get("help")
+            if help_command:
+                result = help_command.execute(help_args)
+                print(result)
+            return
+        
+        args = {}
+        
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description=f"Execute {command_name} command")
+        
+        # Add command-specific arguments
+        command = self.parser.commands.get(command_name)
+        if command:
+            for arg in command.required_args:
+                parser.add_argument(f"--{arg}", required=True, help=f"Required argument: {arg}")
+            
+            for arg, default in command.optional_args.items():
+                parser.add_argument(f"--{arg}", default=default, help=f"Optional argument: {arg}")
+        
+        try:
+            parsed_args = parser.parse_args(command_args[1:])
+            args = vars(parsed_args)
+        except SystemExit:
+            return
+        
+        result = self.dispatcher.dispatch(command_name, args)
+        print(result)
+
+
+def main():
+    """Main entry point."""
+    interpreter = CommandInterpreter()
+    
+    if len(sys.argv) > 1:
+        # Run single command
+        interpreter.run_command(sys.argv[1:])
+    else:
+        # Run interactive mode
+        interpreter.run_interactive()
+
+
+if __name__ == "__main__":
+    main()
