@@ -411,11 +411,11 @@ class UnpackProcessChunksCommand(Command):
                         sqlconn.commit()
                         
                         # Remove extracted file
-                        logger.info("Cleaning up extracted file %s", extracted_file)
+                        logger.info("Cleaning up extracted file %s", chunk_file_path)
                         try:
-                            os.remove(extracted_file)
+                            os.remove(chunk_file_path)
                         except Exception as e:
-                            logger.warning(f"Failed to remove extracted file {extracted_file}: {e}")
+                            logger.warning(f"Failed to remove extracted file {chunk_file_path}: {e}")
                         
                         # Count pages processed
                         page_cursor = sqlconn.execute(
