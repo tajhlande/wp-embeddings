@@ -114,7 +114,7 @@ def download_chunk(api_client: Client,
         logger.info(f"Downloaded {len(chunk_data)} bytes")
         with open(chunk_file_path, "wb") as f:
             f.write(chunk_data)
-        logger.info("Chunk data saved to downloaded_chunk.tar.gz")
+        logger.info("Chunk data saved to %s", chunk_file_path)
 
     except Exception as e:
         logger.exception(f"Failed to download chunk data: {e}")
