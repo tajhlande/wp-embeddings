@@ -153,7 +153,7 @@ def extract_single_file_from_tar_gz(tar_gz_path: str, extract_to: str='.'):
                 
     except Exception as e:
         print(f"Error extracting archive: {e}")
-        return None
+        raise
 
 # Usage
 # extracted_file = extract_single_file_from_tar_gz('archive.tar.gz', './output/')

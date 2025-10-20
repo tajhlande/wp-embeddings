@@ -372,11 +372,11 @@ class UnpackProcessChunksCommand(Command):
                         )
                         sqlconn.commit()
                         
-                        # Remove archive file
+                        # Remove extracted file
                         try:
-                            os.remove(archive_path)
+                            os.remove(extracted_file)
                         except Exception as e:
-                            logger.warning(f"Failed to remove archive {archive_path}: {e}")
+                            logger.warning(f"Failed to remove extracted file {extracted_file}: {e}")
                         
                         # Count pages processed
                         page_cursor = sqlconn.execute(
@@ -395,7 +395,7 @@ class UnpackProcessChunksCommand(Command):
                     logger.error(f"Failed to unpack {chunk_name}: {e}")
                     continue
             
-            return f"✓ Unpacked and processed {processed_count} chunk(s)\nProcessed {total_pages} pages from {processed_count} chunks"
+            return f"✓ Unpacked and processed {processed_count} chunk(s). Processed {total_pages} pages from {processed_count} chunks"
         
         except Exception as e:
             logger.error(f"Failed to unpack chunks: {e}")
@@ -499,7 +499,6 @@ class EmbedPagesCommand(Command):
         except Exception as e:
             logger.error(f"Failed to process pages: {e}")
             return f"✗ Failed to process pages: {e}"
-
 
 class StatusCommand(Command):
     """Show current system status."""
