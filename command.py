@@ -192,6 +192,7 @@ class RefreshChunkDataCommand(Command):
     
     def execute(self, args: Dict[str, Any]) -> str:
         namespace = args["namespace"]
+        logger.info("Refreshing chunk data for namespace: %s", namespace)
         
         try:
             sqlconn = get_sql_conn()
@@ -267,6 +268,7 @@ class DownloadChunksCommand(Command):
             for chunk in chunks_to_download:
                 chunk_name = chunk['chunk_name']
                 chunk_namespace = chunk['namespace']
+                logger.info("Downloading chunk %s from namespace %s...", chunk_name, chunk_namespace)
                 
                 try:
                     # Create download directory
@@ -351,6 +353,7 @@ class UnpackProcessChunksCommand(Command):
                 chunk_name = chunk['chunk_name']
                 chunk_namespace = chunk['namespace']
                 archive_path = chunk['chunk_archive_path']
+                logger.info("Unpacking chunk %s from namespace %s...", chunk_name, chunk_namespace)
                 
                 try:
                     # Create extraction directory
@@ -426,6 +429,8 @@ class EmbedPagesCommand(Command):
                     return "✗ Limit must be a positive integer"
             except ValueError:
                 return "✗ Invalid limit value. Please provide a positive integer."
+            
+        logger.info("Computing embeddings for pages%s%s...", f" in chunk {chunk_name}" if chunk_name else "", f" with limit {limit_int}" if limit_int else "")
         
         try:
             sqlconn = get_sql_conn()
