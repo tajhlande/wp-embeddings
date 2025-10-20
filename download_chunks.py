@@ -6,11 +6,10 @@ import os
 import sqlite3
 import tarfile
 
-import jmespath
-
 from dotenv import load_dotenv
 
 # from wme_sdk.api.snapshot import Snapshot
+from common import ensure_tables, get_sql_conn, upsert_new_chunk_data, upsert_new_page_data
 from wme_sdk.auth.auth_client import AuthClient
 from wme_sdk.api.api_client import Client, Request, Filter
 
@@ -47,11 +46,7 @@ logger = logging.getLogger(__name__)
 #     raise
 
 
-def get_sql_conn() -> sqlite3.Connection:
-    logger.debug("Establishing SQLite connection")
-    sqlconn = sqlite3.connect("chunk_log.db")
-    ensure_tables(sqlconn)
-    return sqlconn
+
 
 def get_enterprise_auth_client() -> tuple[AuthClient, str, str]:
     logger.debug("Creating AuthClient and logging in")
@@ -85,34 +80,6 @@ def revoke_token_on_exit(auth_client: Client, refresh_token: str):
         except Exception as e:
             logger.error(f"Failed to revoke token: {e}")
 
-def ensure_tables(sqlconn: sqlite3.Connection):
-    chunk_log_table_sql = """
-        CREATE TABLE IF NOT EXISTS chunk_log (
-            chunk_name TEXT NOT NULL PRIMARY KEY,
-            namespace TEXT NOT NULL,
-            chunk_archive_path TEXT,
-            chunk_extracted_path TEXT,
-            downloaded_at DATETIME,
-            completed_at DATETIME
-        );
-        """
-    page_log_table_sql = """
-        CREATE TABLE IF NOT EXISTS page_log (
-            page_id TEXT NOT NULL PRIMARY KEY,
-            page_title TEXT,
-            chunk_name TEXT,
-            url TEXT,
-            extracted_at DATETIME,
-            abstract TEXT
-        );
-        """
-    try:
-        sqlconn.execute(chunk_log_table_sql)
-        sqlconn.execute(page_log_table_sql)
-    except sqlite3.Error as e:
-        logger.error(f"Failed to create tables: {e}")
-        raise
-
 def find_chunks(api_client: Client, sqlconn: sqlite3.Connection, request: Request, namespace: str): 
     try:
         # "enwiki_namespace_0"
@@ -124,14 +91,7 @@ def find_chunks(api_client: Client, sqlconn: sqlite3.Connection, request: Reques
     try:
         for chunk_name in snapshot_json['chunks']:
             logger.info(f"Chunk: {chunk_name}")
-            upsert_sql = f"""
-                INSERT INTO chunk_log(chunk_name, namespace) VALUES(?)
-                ON CONFLICT(chunk_name) DO UPDATE 
-                SET downloaded_at = NULL, completed_at = NULL;
-                """
-            sqlconn.execute(upsert_sql, (chunk_name))
-            sqlconn.commit()
-
+            upsert_new_chunk_data(chunk_name, namespace, sqlconn)
             # logger.info(f"Name: {chunk_json['date_modified']}")
             # logger.info(f"Abstract: {chunk_json['identifier']}")
             # logger.info(f"Description: {chunk_json['size']}")  
@@ -215,29 +175,20 @@ def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_pa
                 line_number += 1
                 # Assuming each line is a JSON object representing a page
                 #logger.debug(f"Reading line {line_number}: {line.strip()[:1000]}")
-                page_data = json.loads(line)
+                raw_page_data = json.loads(line)
                 #logger.debug(f"Parsed JSON: {json.dumps(page_data)[:1000]}")
                 page_data_extract = {
-                    'id': jmespath.search('identifier', page_data), # page_data.get('id'),
-                    'title': jmespath.search('name', page_data), # page_data.get('title'),
+                    'page_id': raw_page_data.get('id'),
+                    'title': raw_page_data.get('name'),
                     'chunk_name': chunk_name,
-                    'url': jmespath.search('url', page_data), # page_data.get('url'),
-                    'abstract': jmespath.search('abstract', page_data) # page_data.get('abstract')
+                    'url': raw_page_data.get('url'),
+                    'abstract': raw_page_data.get('abstract'),
                 }
                 #logger.debug(f"Extracted page data: {json.dumps(page_data_extract, indent=2)}")
-                logger.debug(f"Processing page on line {line_number}. Page ID: {page_data_extract['id']}, Page title: {page_data_extract['title']}")
-                page_data_update_sql = f"""
-                    INSERT INTO page_log(page_id, page_title, chunk_name, url, extracted_at, abstract) 
-                    VALUES(:id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)
-                    ON CONFLICT(page_id) DO UPDATE 
-                    SET page_title = :title,
-                        chunk_name = :chunk_name,
-                        url = :url,
-                        extracted_at = CURRENT_TIMESTAMP,           
-                        abstract = :abstract;
-                    """
-                sqlconn.execute(page_data_update_sql, page_data_extract)
-            sqlconn.commit()         
+                logger.debug(f"Processing page on line {line_number}. Page ID: {page_data_extract['page_id']}, Page title: {page_data_extract['title']}")
+                upsert_new_page_data(page_data_extract, sqlconn)
+                
+                  
                 
     except Exception as e:
         logger.exception(f"Error parsing chunk file: {e}")
@@ -300,7 +251,7 @@ def process_one_chunk():
 
         namespace = "enwiki_namespace_0"
         chunk_name = "enwiki_namespace_0_chunk_0"
-        chunk_file_path = f"{chunk_name}.tar.gz"
+        chunk_file_path = f"downloaded/{namespace}/{chunk_name}.tar.gz"
 
         #download_chunk(api_client, namespace, chunk_name, chunk_file_path)
 
@@ -317,4 +268,5 @@ def process_one_chunk():
         parse_chunk_file(sqlconn, chunk_name, os.path.join(extracted_chunk_path, extracted_file_name))
 
 if __name__ == "__main__":
+    ensure_tables(get_sql_conn())
     process_one_chunk()
