@@ -8,7 +8,7 @@ import sqlite3
 
 # Import existing modules
 from common import get_sql_conn, ensure_tables, get_page_ids_needing_embedding_for_chunk
-from download_chunks import get_enterprise_auth_client, get_enterprise_api_client, get_chunk_info_for_namespace, download_chunk, extract_single_file_from_tar_gz, parse_chunk_file
+from download_chunks import count_lines_in_file, get_enterprise_auth_client, get_enterprise_api_client, get_chunk_info_for_namespace, download_chunk, extract_single_file_from_tar_gz, parse_chunk_file
 from index_pages import get_embedding_function, compute_embeddings_for_chunk
 from progress_utils import ProgressTracker
 
@@ -401,10 +401,16 @@ class UnpackProcessChunksCommand(Command):
                     extracted_file = extract_single_file_from_tar_gz(archive_path, extract_dir)
                     
                     if extracted_file:
-                        # Parse chunk file
                         chunk_file_path = f"{extract_dir}/{extracted_file}"
+                        
+                        # count lines in chunk file
+                        file_line_count = count_lines_in_file(chunk_file_path)
+
+                        # Parse chunk file
                         #logger.info("Parsing pages out of chunk file %s", chunk_file_path)
-                        line_count = parse_chunk_file(sqlconn, chunk_name, chunk_file_path)
+                        with ProgressTracker("Parsing chunk file", total=file_line_count, unit="pages") as tracker:
+                            line_count = parse_chunk_file(sqlconn, chunk_name, chunk_file_path, tracker)
+                        logger.info("Parsed %d pages from chunk file %s", line_count, chunk_file_path)
                         
                         # Update database
                         sqlconn.execute(

@@ -162,7 +162,27 @@ def extract_single_file_from_tar_gz(tar_gz_path: str, extract_to: str='.'):
 # if extracted_file:
 #     print(f"Successfully extracted: {extracted_file}")
 
-def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_path: str) -> int:
+def count_lines_in_file(file_path: str) -> int:
+    """
+    Count the number of lines in a given file.
+    
+    Args:
+        file_path (str): Path to the file to count lines in.
+        
+    Returns:
+        int: Number of lines in the file.
+    """
+    try:
+        line_count = 0
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for _ in f:
+                line_count += 1
+        return line_count
+    except Exception as e:
+        logger.exception(f"Error counting lines in file {file_path}: {e}")
+        raise
+
+def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_path: str, tracker: ProgressTracker = None) -> int:
     """
     Parse the extracted chunk file to read its contents.
     
@@ -171,45 +191,36 @@ def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_pa
     
     """
     try:
-        logger.info(f"Parsing chunk file: {chunk_file_path}")
+        #logger.info(f"Parsing chunk file: {chunk_file_path}")
         
         # First, count total lines for progress tracking
-        total_lines = 0
-        with open(chunk_file_path, 'r', encoding='utf-8') as f:
-            for _ in f:
-                total_lines += 1
-        
-        logger.info(f"Found {total_lines} lines to process")
+        total_lines = count_lines_in_file(chunk_file_path)
+        #logger.info(f"Found {total_lines} lines to process")
         
         # Parse with progress bar - reduce logging frequency to avoid interference
-        with ProgressTracker(f"Parsing {chunk_name}", total=total_lines, unit="lines") as tracker:
-            with open(chunk_file_path, 'r', encoding='utf-8') as f:
-                line_number = 0
-                for line in f:
-                    line_number += 1
-                    # Assuming each line is a JSON object representing a page
-                    raw_page_data = json.loads(line)
-                    page_data_extract = {
-                        'page_id': raw_page_data.get('id'),
-                        'title': raw_page_data.get('name'),
-                        'chunk_name': chunk_name,
-                        'url': raw_page_data.get('url'),
-                        'abstract': raw_page_data.get('abstract'),
-                    }
-                    
-                    # Only log debug info occasionally to avoid progress bar interference
-                    if line_number % 50000 == 0:
-                        logger.debug(f"Processing page on line {line_number}. Page ID: {page_data_extract['page_id']}, Page title: {page_data_extract['title']}")
-                    
-                    # Log progress less frequently than before
-                    if line_number % 50000 == 0:
-                        logger.info(f"Processed {line_number} lines so far...")
-                    
-                    # Upsert page data into the database
-                    upsert_new_page_data(page_data_extract, sqlconn)
-                    tracker.update(1)
-        
-        logger.info(f"Completed parsing {chunk_name}: {line_number} lines processed")
+        with open(chunk_file_path, 'r', encoding='utf-8') as f:
+            line_number = 0
+            for line in f:
+                line_number += 1
+                # Assuming each line is a JSON object representing a page
+                raw_page_data = json.loads(line)
+                page_data_extract = {
+                    'page_id': raw_page_data.get('id'),
+                    'title': raw_page_data.get('name'),
+                    'chunk_name': chunk_name,
+                    'url': raw_page_data.get('url'),
+                    'abstract': raw_page_data.get('abstract'),
+                }
+                
+                # Log progress if no tracker
+                if not tracker and line_number % 10000 == 0:
+                    logger.info(f"Processed {line_number} lines so far...")
+                
+                # Upsert page data into the database
+                upsert_new_page_data(page_data_extract, sqlconn)
+                tracker.update(1) if tracker else None
+    
+        #logger.info(f"Completed parsing {chunk_name}: {line_number} lines processed")
         return line_number
                   
                 
