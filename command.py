@@ -279,12 +279,14 @@ class DownloadChunksCommand(Command):
             if limit:
                 logger.info("Limiting download to %d chunks at most", limit)
                 chunks_to_download = chunks_to_download[:limit] 
-            logger.info("Planning to download %d chunks", len(chunks_to_download))
+                logger.info("Planning to download %d chunks (limited)", len(chunks_to_download))
+            else:
+                logger.info("Planning to download %d chunks", len(chunks_to_download))
 
             for chunk in chunks_to_download:
                 chunk_name = chunk['chunk_name']
                 chunk_namespace = chunk['namespace']
-                logger.info("Downloading chunk %s from namespace %s...", chunk_name, chunk_namespace)
+                #logger.info("Downloading chunk %s from namespace %s...", chunk_name, chunk_namespace)
                 
                 try:
                     # Create download directory
@@ -294,9 +296,9 @@ class DownloadChunksCommand(Command):
                     chunk_file_path = f"{download_dir}/{chunk_name}.tar.gz"
                     
                     # Download chunk
-                    with ProgressTracker("Downloading chunk", unit="bytes") as tracker:
+                    with ProgressTracker(f"Downloading {chunk_name}", unit="bytes") as tracker:
                         download_chunk(api_client, chunk_namespace, chunk_name, chunk_file_path, tracker)
-                    logger.info("Chunk saved to %s", chunk_file_path)
+                    logger.debug("Chunk saved to %s", chunk_file_path)
 
                     # Update database
                     sqlconn.execute(
@@ -306,7 +308,7 @@ class DownloadChunksCommand(Command):
                     sqlconn.commit()
                     
                     downloaded_count += 1
-                    logger.info(f"Downloaded {chunk_name}")
+                    logger.debug(f"Downloaded %s", chunk_name)
                     
                 except Exception as e:
                     logger.error(f"Failed to download {chunk_name}: {e}")
