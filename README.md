@@ -15,13 +15,21 @@ It implements a few functions:
 
 All of the metadata and computed embeddings are stored in a Sqlite 3 database called `chunk_log.db`.
 
-A slightly modified copy of the Wikimedia Enterprise Python SDK is in the `wme_sdk` directory. Their code has its own license, in the `LICENSE` file there. 
+A slightly modified copy of the Wikimedia Enterprise Python SDK is in the `wme_sdk` directory. Their code has its own license, in the `wme_sdk/LICENSE` file.  
+
+The remainder of the project is licensed by the file in `./LICENSE`.
 
 The main file is `command.py`; see below for use. 
 
 ## Getting started
 
-To get started, create a virtual environment and activate it:
+First, install uv if you haven't already:
+
+```bash
+pip3 install uv
+```
+
+Then create a virtual environment and activate it:
 
 ```bash
 uv venv
@@ -89,13 +97,28 @@ them repeatedly with `--limit` to incrementally do the required work over an ent
 ## Operational notes
 
 * The Wikimedia Enterprise API client expects a `.env` file containing valid credentials in the following keys: `WME_USERNAME`, `WME_PASSWORD`.
-* `PYTHONPATH` can also be set in the `.env` file to tell Python where to look for modules, if you aren't running in the project home directory.
 * Downloaded archive files are stored in `./downloaded/{namespace}` and named like `{chunk_name}.tar.gz`.
 * This code assumes that each archive contains exactly one chunk file in ndjson format. 
 * Extracted archives are stored in `./extracted/{namespace}` and are deleted after unpacking and parsing completes (because they are about 2GB each!) 
 * Both download and extract operations will overwrite files if the files exist already.
-* Make sure you have enough disk space. For reference, the English Wikipedia namespace 0 archive (regular article pages) takes about 133G (measured in October 2025).
+* Make sure you have enough disk space. For reference, the complete English Wikipedia namespace 0 archive (article pages) takes about 133G in .tar.gz form (as measured in October 2025).
 
 ## Embeddings
 
-Embeddings are computed with the 
+Embeddings are computed with the `jina-embeddings-v4-text-matching-GGUF` embedding model by default.  Model config is provided through environment variables, and the following parameters are needed:
+
+- `EMBEDDING_MODEL_API_URL` – Required: An OpenAI compatible endpoint for model access
+- `EMBEDDING_MODEL_API_KEY` - Required: The key for accessing that API
+- `EMBEDDING_MODEL_NAME` - Optional: The name of the model in the API. Defaults to `jina-embeddings-v4-text-matching-GGUF` if not provided
+
+The easiest way to configure the embedding model is to add the  environment variables to a `.env` file in the project root:
+
+```bash
+EMBEDDING_MODEL_API_URL=https://api.example.com/v1/embeddings
+EMBEDDING_MODEL_API_KEY=your_api_key_here
+EMBEDDING_MODEL_NAME=jina-embeddings-v4-text-matching-GGUF
+```
+
+
+Embeddings are stored in the sqlite3 database after computation. Though `chromadb` is a project dependency, I am not using
+ChromaDB to store the embeddings. 
