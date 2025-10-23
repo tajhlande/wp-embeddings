@@ -5,6 +5,7 @@ import sqlite3
 import time
 
 from contextlib import contextmanager
+from typing import Optional
 
 import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
@@ -12,7 +13,8 @@ import chromadb.utils.embedding_functions as embedding_functions
 from chromadb.api.types import EmbeddingFunction, Embeddings
 from chromadb.api.models.Collection import Collection as ChromaCollection
 
-from database import get_any_page, get_page_by_id, get_page_ids_needing_embedding_for_chunk, get_sql_conn, update_embeddings_for_page
+from classes import Page
+from database import bytes_to_numpy, get_any_page, get_page_by_id, get_page_ids_needing_embedding_for_chunk, get_page_vectors, get_sql_conn, update_embeddings_for_page
 from progress_utils import ProgressTracker
 
 # Configure logging to suppress INFO messages from httpx
@@ -41,7 +43,7 @@ def get_embedding_function(model_name: str,
 def init_chroma_db(collection_name: str, 
                    collection_path: str,
                    embedding_function: EmbeddingFunction
-                ) -> tuple[chromadb.PersistentClient, ChromaCollection]:
+                ) -> tuple[chromadb.PersistentClient, ChromaCollection]: # type: ignore
     # Locate and intiialize ChromaDB vector store if needed
     logger.debug("Initializing ChromaDB client for path %s", collection_path)
     chroma_client = chromadb.PersistentClient(path=collection_path)
@@ -55,9 +57,9 @@ def init_chroma_db(collection_name: str,
 
     return chroma_client, collection
 
-def compute_page_embeddings(page_data: dict, embedding_function: EmbeddingFunction) -> Embeddings:
-    logger.debug("Computing embedding for page(%d) titled %s", page_data['page_id'], page_data['title'])
-    text_content = f"{page_data['title']}\n{page_data['abstract']}"
+def compute_page_embeddings(page: Page, embedding_function: EmbeddingFunction) -> Embeddings:
+    logger.debug("Computing embedding for page(%d) titled %s", page.page_id, page.title)
+    text_content = f"{page.title}\n{page.abstract}"
     return embedding_function(text_content)
 
 def test_one_embedding():
@@ -69,10 +71,10 @@ def test_one_embedding():
         openai_api_key=embedding_model_api_key
     )
 
-    page_data = get_any_page(sqlconn)
-#    logger.debug(f"Fetched page data: {json.dumps(page_data)}")
+    page: Optional[Page] = get_any_page(sqlconn)
+    assert page is not None, "No page found in database for testing."
 
-    embeddings = compute_page_embeddings(page_data, embedding_function)
+    embeddings = compute_page_embeddings(page, embedding_function)
     # logger.debug(f"Computed embeddings:\n{embeddings}")
     # logger.debug(f"Vector count: {len(embeddings)}")
     # n = 0
@@ -83,16 +85,18 @@ def test_one_embedding():
     # store the embedding
     if len(embeddings) > 1:
         logger.warning("More than one embedding returned, only storing the first one.")
-    page_data['embedding_vector'] = embeddings[0]
-
-    update_embeddings_for_page(page_data, sqlconn)
+    embedding = embeddings[0]
+    update_embeddings_for_page(page.page_id, embedding, sqlconn)
 
     # retrieve the embedding
-    retrieved_page_data = get_page_by_id(page_data['page_id'], sqlconn)
+    retrieved_page_vectors = get_page_vectors(page.page_id, sqlconn)
 
-    assert retrieved_page_data['embedding_vector'] is not None, "Embedding vector was not stored correctly."
-    assert retrieved_page_data['embedding_vector'].shape == page_data['embedding_vector'].shape, "Stored embedding vector shape does not match."
-    assert (retrieved_page_data['embedding_vector'] == page_data['embedding_vector']).all(), "Stored embedding vector data does not match."
+    assert retrieved_page_vectors is not None, "No page vectors found after storing embedding."
+    assert retrieved_page_vectors.embedding_vector is not None, "Embedding vector was not stored correctly."
+    retrieved_embedding = bytes_to_numpy(retrieved_page_vectors.embedding_vector)
+    assert retrieved_embedding is not None, "Failed to convert stored embedding vector from bytes."
+    assert retrieved_embedding.shape == embedding.shape, "Stored embedding vector shape does not match."
+    assert (retrieved_embedding == embedding).all(), "Stored embedding vector data does not match."
 
 
 @contextmanager
@@ -103,8 +107,8 @@ def timer():
 def compute_embeddings_for_chunk(chunk_name: str, 
                                  embedding_function: EmbeddingFunction, 
                                  sqlconn: sqlite3.Connection, 
-                                 limit: int = None, 
-                                 tracker: ProgressTracker = None) -> None:
+                                 limit: Optional[int] = None, 
+                                 tracker: Optional[ProgressTracker] = None) -> None:
 
     #logger.info("Computing embeddings for chunk %s", chunk_name)
     page_id_list = get_page_ids_needing_embedding_for_chunk(chunk_name, sqlconn)
@@ -121,15 +125,16 @@ def compute_embeddings_for_chunk(chunk_name: str,
     # Use progress bar for embedding computation
     counter = 0
     for page_id in page_id_list:
-        page_data = get_page_by_id(page_id, sqlconn)
-        embeddings = compute_page_embeddings(page_data, embedding_function)
-        # if len(embeddings) > 1:
-        #     logger.warning("More than one embedding returned, only storing the first one.")
-        page_data['embedding_vector'] = embeddings[0]
-        update_embeddings_for_page(page_data, sqlconn)
+        page = get_page_by_id(page_id, sqlconn)
+        if not page:
+            logger.warning("Page with page_id %d not found, skipping.", page_id)
+            continue
+        embeddings = compute_page_embeddings(page, embedding_function)
+        embedding = embeddings[0]
+        update_embeddings_for_page(page_id, embedding, sqlconn)
         #logger.debug("Stored embedding for page_id %d", page_id)
         counter += 1
-        tracker.update(1)
+        tracker.update(1) if tracker else None
     
     #logger.info("Computed and stored embeddings for %d pages in chunk %s in %.2f seconds", counter, chunk_name, elapsed())
 

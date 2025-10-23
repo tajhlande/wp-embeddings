@@ -10,6 +10,7 @@ import time
 from dotenv import load_dotenv
 
 # from wme_sdk.api.snapshot import Snapshot
+from classes import Page
 from database import ensure_tables, get_sql_conn, upsert_new_chunk_data, upsert_new_page_data
 from wme_sdk.auth.auth_client import AuthClient
 from wme_sdk.api.api_client import Client, Request, Filter
@@ -204,20 +205,18 @@ def parse_chunk_file(sqlconn: sqlite3.Connection, chunk_name: str, chunk_file_pa
                 line_number += 1
                 # Assuming each line is a JSON object representing a page
                 raw_page_data = json.loads(line)
-                page_data_extract = {
-                    'page_id': raw_page_data.get('id'),
-                    'title': raw_page_data.get('name'),
-                    'chunk_name': chunk_name,
-                    'url': raw_page_data.get('url'),
-                    'abstract': raw_page_data.get('abstract'),
-                }
+                page = Page(page_id=raw_page_data.get('id'), 
+                            title=raw_page_data.get('name'),
+                            chunk_name=chunk_name,
+                            url=raw_page_data.get('url'),
+                            abstract=raw_page_data.get('abstract'))
                 
                 # Log progress if no tracker
                 if not tracker and line_number % 10000 == 0:
                     logger.info(f"Processed {line_number} lines so far...")
                 
                 # Upsert page data into the database
-                upsert_new_page_data(page_data_extract, sqlconn)
+                upsert_new_page_data(page, sqlconn)
                 tracker.update(1) if tracker else None
     
         #logger.info(f"Completed parsing {chunk_name}: {line_number} lines processed")

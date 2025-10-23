@@ -524,7 +524,12 @@ class EmbedPagesCommand(Command):
                 logger.info("Processing %sembeddings for next available chunk...", f"up to {limit} " if limit else "")
 
                 cursor = sqlconn.execute(
-                    "SELECT DISTINCT chunk_name FROM page_log WHERE embedding_vector IS NULL"
+                    """
+                    SELECT DISTINCT chunk_name 
+                    FROM page_log 
+                    LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id 
+                    WHERE page_vector.embedding_vector IS NULL;
+                    """
                 )
                 chunk_name_list = [row['chunk_name'] for row in cursor.fetchall()]
                 
@@ -565,7 +570,7 @@ class EmbedPagesCommand(Command):
                             logger.info(f"Processed {pages_to_process} pages for chunk {chunk_name}")
                     
                     except Exception as e:
-                        logger.error(f"Failed to process chunk {chunk_name}: {e}")
+                        logger.exception(f"Failed to process chunk {chunk_name}: {e}")
                         continue
                 
                 return f"✓ Processed {total_processed} pages across {len(chunk_name_list)} chunk(s)"
@@ -609,12 +614,13 @@ class StatusCommand(Command):
                        SUM(total_pages) as "total_pages_count" 
                     FROM (
                         SELECT chunk_log.chunk_name, 
-                           CASE WHEN SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 1 ELSE 0 END) = 0 AND SUM(page_id) > 0 THEN 1 ELSE 0 END as is_complete,
-                           SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 1 ELSE 0 END) as pending_embeddings,
-                           SUM(CASE WHEN page_log.embedding_vector IS NULL THEN 0 ELSE 1 END) as completed_embeddings,
+                           CASE WHEN SUM(CASE WHEN page_vector.embedding_vector IS NULL THEN 1 ELSE 0 END) = 0 AND SUM(page_log.page_id) > 0 THEN 1 ELSE 0 END as is_complete,
+                           SUM(CASE WHEN page_vector.embedding_vector IS NULL and page_log.page_id IS NOT NULL THEN 1 ELSE 0 END) as pending_embeddings,
+                           SUM(CASE WHEN page_vector.embedding_vector IS NULL THEN 0 ELSE 1 END) as completed_embeddings,
                            COUNT(page_log.page_id) as total_pages
                         FROM chunk_log
                         LEFT JOIN page_log ON chunk_log.chunk_name = page_log.chunk_name
+                        LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id
                         GROUP BY chunk_log.chunk_name
                     );
             """)
@@ -626,6 +632,7 @@ class StatusCommand(Command):
                     COUNT(*) as total_pages,
                     SUM(CASE WHEN embedding_vector IS NOT NULL THEN 1 ELSE 0 END) as pages_with_embeddings
                 FROM page_log
+                LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id
             """)
             page_stats = page_cursor.fetchone()
             

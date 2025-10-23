@@ -1,10 +1,15 @@
+from enum import StrEnum
 import json
 import sqlite3
 import logging
+from dataclasses import asdict, fields
+from typing import Iterator, Optional, Type, TypeVar
+
+import numpy as np
 
 from numpy.typing import NDArray
 
-import numpy as np
+from classes import Chunk, Page, PageVectors, Vector3D 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,18 +32,41 @@ def ensure_tables(sqlconn: sqlite3.Connection):
             chunk_name TEXT,
             url TEXT,
             extracted_at DATETIME,
-            abstract TEXT,
-            embedding_vector BLOB,
-            reduced_vector BLOB,
-            three_d_vector TEXT
+            abstract TEXT
+        );
+        """
+    # New tables for vector storage and clustering information
+    page_vector_table_sql = """
+        CREATE TABLE IF NOT EXISTS page_vector (
+            page_id INTEGER PRIMARY KEY REFERENCES page_log(page_id) ON DELETE CASCADE,
+            embedding_vector BLOB,    -- original 2048‑dim numpy array (float32)
+            reduced_vector BLOB,      -- PCA‑reduced 100‑dim array (float32)
+            cluster_id INTEGER,       -- FK to cluster_info.cluster_id
+            three_d_vector TEXT       -- JSON "[x, y, z]"
+        );
+        """
+    cluster_info_table_sql = """
+        CREATE TABLE IF NOT EXISTS cluster_info (
+            cluster_id INTEGER PRIMARY KEY,
+            centroid_3d TEXT,         -- JSON "[x, y, z]"
+            cluster_name TEXT,
+            cluster_description TEXT
         );
         """
     try:
         sqlconn.execute(chunk_log_table_sql)
         sqlconn.execute(page_log_table_sql)
+        sqlconn.execute(page_vector_table_sql)
+        sqlconn.execute(cluster_info_table_sql)
+        # Index for fast cluster lookup
+        sqlconn.execute("CREATE INDEX IF NOT EXISTS idx_page_vector_cluster ON page_vector(cluster_id);")
     except sqlite3.Error as e:
         logger.error(f"Failed to create tables: {e}")
         raise
+
+class VectorType(StrEnum):
+    EMBEDDING = "embedding_vector"
+    REDUCED = "reduced_vector"
 
 _sqlconns = {}
 
@@ -51,33 +79,29 @@ def get_sql_conn(db_file: str = "chunk_log.db") -> sqlite3.Connection:
     _sqlconns[db_file] = sqlconn
     return sqlconn
 
-def _get_page_from_row(row: sqlite3.Row) -> dict:
-    return {
-    'page_id': row['page_id'],
-        'title': row['title'],         
-        'chunk_name': row['chunk_name'],
-        'url': row['url'],
-        'extracted_at': row['extracted_at'],
-        'abstract': row['abstract']  ,
-        'embedding_vector': row['embedding_vector'],
-        'reduced_vector': row['reduced_vector'],
-        'three_d_vector': row['three_d_vector']
-    }
+T = TypeVar('T')
+def _row_to_dataclass(row: sqlite3.Row, cls: Type[T]) -> T:
+    """Map a Row (dict-like) to the given dataclass."""
+    # Build a dict of column_name → value
+    col_dict = {k: row[k] for k in row.keys()}
+    # Extract only the fields that the dataclass actually defines
+    field_names = {f.name for f in fields(cls)} # type: ignore
+    relevant = {k: v for k, v in col_dict.items() if k in field_names}
+    return cls(**relevant)          # type: ignore[arg-type]
 
-def get_any_page(sqlconn: sqlite3.Connection) -> dict:
+def get_any_page(sqlconn: sqlite3.Connection) -> Optional[Page]:
     select_a_page_sql = """
-        SELECT page_id, title, chunk_name, url, extracted_at, abstract, embedding_vector, reduced_vector, three_d_vector
+        SELECT page_id, title, chunk_name, url, extracted_at, abstract
         FROM page_log
         LIMIT 1
         """
     cursor = sqlconn.execute(select_a_page_sql) 
     row = cursor.fetchone()
-    page_data = _get_page_from_row(row)
-    return page_data
+    return _row_to_dataclass(row, Page)
 
-def get_page_by_id(page_id: int, sqlconn: sqlite3.Connection) -> dict:
+def get_page_by_id(page_id: int, sqlconn: sqlite3.Connection) -> Optional[Page]:
     select_page_sql = """
-        SELECT page_id, title, chunk_name, url, extracted_at, abstract, embedding_vector, reduced_vector, three_d_vector
+        SELECT page_id, title, chunk_name, url, extracted_at, abstract
         FROM page_log
         WHERE page_id = ?
         LIMIT 1
@@ -85,52 +109,59 @@ def get_page_by_id(page_id: int, sqlconn: sqlite3.Connection) -> dict:
     cursor = sqlconn.execute(select_page_sql, (page_id,)) 
     row = cursor.fetchone()
     if row:
-        fetched_data = _get_page_from_row(row)
+        return _row_to_dataclass(row, Page)
     else:
         logger.warning(f"No page found with page_id: {page_id}")
-        return {}
+        return None
     
-    # convert stored bytes to numpy arrays 
-    embedding_vector = np.frombuffer(fetched_data['embedding_vector'], dtype=np.float32) if fetched_data.get('embedding_vector') else None
-    reduced_vector = np.frombuffer(fetched_data['reduced_vector'], dtype=np.float32) if fetched_data.get('reduced_vector') else None
-    three_d_vector = json.loads(fetched_data['three_d_vector']) if fetched_data.get('three_d_vector') else None
-    page_data = {
-        key: embedding_vector if key == 'embedding_vector' else 
-             reduced_vector if key == 'reduced_vector' else
-             three_d_vector if key == 'three_d_vector' else
-             value
-        for key, value in fetched_data.items()
-    }
-    return page_data
+def bytes_to_numpy(data: Optional[bytes]) -> Optional[NDArray]:
+    """Convert bytes from the database back to a NumPy array."""
+    return np.frombuffer(data, dtype=np.float32) if data is not None else None
+
+def numpy_to_bytes(data: Optional[NDArray]) -> Optional[bytes]:
+    """Convert NumPy array to bytes for storage."""
+    return np.array(data).astype(np.float32).tobytes() if data is not None else None
+
+def text_to_three_d_vector(data: Optional[str]) -> Optional[Vector3D]: 
+    """Convert JSON string to 3D vector tuple."""
+    if data:
+        list_data = json.loads(data)
+        if not (isinstance(list_data, list) and len(list_data) == 3 and all(isinstance(x, (int, float)) for x in list_data)):
+            raise ValueError(f"Invalid three_d_vector data: {data}")
+        return tuple(list_data)
+    else:
+        return None
+
+def three_d_vector_to_text(vector: Optional[Vector3D]) -> Optional[str]:
+    """Convert 3D vector tuple to JSON string."""
+    return json.dumps(vector) if vector else None
+
     
-def upsert_new_page_data(page_data: dict, sqlconn: sqlite3.Connection) -> None:
+def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
     page_data_upsert_sql = """
-        INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract, embedding_vector, reduced_vector, three_d_vector) 
-        VALUES(:page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract, NULL, NULL, NULL)
+        INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract) 
+        VALUES(:page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)
         ON CONFLICT(page_id) DO UPDATE 
         SET title = :title,
             chunk_name = :chunk_name,
             url = :url,
             extracted_at = CURRENT_TIMESTAMP,           
-            abstract = :abstract, 
-            embedding_vector = NULL,
-            reduced_vector = NULL,
-            three_d_vector = NULL
+            abstract = :abstract
         """
 
     try:
         cursor = sqlconn.cursor()
-        cursor.execute(page_data_upsert_sql, page_data)
+        cursor.execute(page_data_upsert_sql, asdict(page))
         sqlconn.commit()
     except sqlite3.Error as e:
         try:
             sqlconn.rollback()
         except Exception as ex:
             logger.error(f"Failed to roll back sql transaction while handling another error: {ex}")            
-        logger.error(f"Failed to upsert page data for page {page_data.get('page_id')}: {e}")
+        logger.error(f"Failed to upsert page data for page {page.page_id}: {e}")
         raise
 
-def upsert_new_chunk_data(chunk_name: str, namespace: str, sqlconn: sqlite3.Connection) -> dict:
+def upsert_new_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
     upsert_sql = """
         INSERT INTO chunk_log(chunk_name, namespace, downloaded_at, completed_at)
           VALUES(:chunk_name, :namespace, NULL, NULL)
@@ -139,25 +170,18 @@ def upsert_new_chunk_data(chunk_name: str, namespace: str, sqlconn: sqlite3.Conn
         """
     try:
         cursor = sqlconn.cursor()
-        cursor.execute(upsert_sql, { 'chunk_name': chunk_name, 'namespace': namespace})
+        cursor.execute(upsert_sql, { 'chunk_name': chunk.chunk_name, 'namespace': chunk.namespace})
         sqlconn.commit()
     except sqlite3.Error as e:
         try:
             sqlconn.rollback()
         except Exception as ex:
             logger.error(f"Failed to roll back sql transaction while handling another error: {ex}")            
-        logger.error(f"Failed to upsert chunk info for chunk {chunk_name}: {e}")
+        logger.error(f"Failed to upsert chunk info for chunk {chunk.chunk_name}: {e}")
         raise
-    return {
-        'chunk_name': chunk_name,
-        'namespace': namespace,
-        'downloaded_at': None,
-        'completed_at': None,
-        'chunk_archive_path': None,
-        'chunk_extracted_path': None
-    }
 
-def update_chunk_data(chunk_data: dict, sqlconn: sqlite3.Connection) -> None:
+
+def update_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
     update_sql = """
         UPDATE chunk_log 
         SET chunk_archive_path = :chunk_archive_path,
@@ -168,17 +192,17 @@ def update_chunk_data(chunk_data: dict, sqlconn: sqlite3.Connection) -> None:
         """
     try:
         cursor = sqlconn.cursor()
-        cursor.execute(update_sql, chunk_data)
+        cursor.execute(update_sql, asdict(chunk))
         sqlconn.commit()
     except sqlite3.Error as e:
         try:
             sqlconn.rollback()
         except Exception as ex:
             logger.error(f"Failed to roll back sql transaction while handling another error: {ex}")            
-        logger.error(f"Failed to update chunk data for chunk {chunk_data.get('chunk_name')}: {e}")
+        logger.error(f"Failed to update chunk data for chunk {chunk.chunk_name}: {e}")
         raise
 
-def get_chunk_data(chunk_name: str, sqlconn: sqlite3.Connection) -> dict:
+def get_chunk_data(chunk_name: str, sqlconn: sqlite3.Connection) -> Optional[Chunk]:
     select_sql = """
         SELECT chunk_name, namespace, chunk_archive_path, chunk_extracted_path, downloaded_at, completed_at
         FROM chunk_log
@@ -188,41 +212,93 @@ def get_chunk_data(chunk_name: str, sqlconn: sqlite3.Connection) -> dict:
     cursor = sqlconn.execute(select_sql, {'chunk_name': chunk_name}) 
     row = cursor.fetchone()
     if row:
-        chunk_data = {
-            'chunk_name': row['chunk_name'],
-            'namespace': row['namespace'],
-            'chunk_archive_path': row['chunk_archive_path'],
-            'chunk_extracted_path': row['chunk_extracted_path'],
-            'downloaded_at': row['downloaded_at'],
-            'completed_at': row['completed_at']
-        }
+        return _row_to_dataclass(row, Chunk)
     else:
         logger.warning(f"No chunk found with chunk_name: {chunk_name}")
-        chunk_data = {}
-    return chunk_data
+        return None
 
-def update_embeddings_for_page(page_data: dict, sqlconn: sqlite3.Connection) -> None:
-    # convert numpy arrays to bytes for storage
-    embedding_vector_bytes = np.array(page_data['embedding_vector']).astype(np.float32).tobytes() if isinstance(page_data['embedding_vector'], np.ndarray) else page_data['embedding_vector']
-    reduced_vector_bytes = np.array(page_data['reduced_vector']).astype(np.float32).tobytes() if isinstance(page_data['reduced_vector'], np.ndarray) else page_data['reduced_vector']
-    three_d_vector_text = json.dumps(page_data['three_d_vector']) if page_data.get('three_d_vector') else None
-    prepared_data = {
-        key: embedding_vector_bytes if key == 'embedding_vector' else 
-             reduced_vector_bytes if key == 'reduced_vector' else 
-             three_d_vector_text if key == 'three_d_vector' else 
-             value
-        for key, value in page_data.items()
-    }
 
-    logger.debug(f"Updating page embedding: {page_data['page_id']}")
+# ---------------------------------------------------------------------------
+# Vector storage helper utilities (new for dimensionality processing)
+# ---------------------------------------------------------------------------
+
+def get_page_vectors(page_id: int, sqlconn: sqlite3.Connection) -> Optional[PageVectors]:
+    select_sql = """
+        SELECT page_id, embedding_vector, reduced_vector, cluster_id, three_d_vector
+        FROM page_vector
+        WHERE page_id = ?
+        LIMIT 1
+        """
+    cursor = sqlconn.execute(select_sql, (page_id,)) 
+    row = cursor.fetchone()
+    if row:
+        return _row_to_dataclass(row, PageVectors)
+    else:
+        logger.warning(f"No page vectors found with page_id: {page_id}")
+        return None
+
+def store_vector(page_id: int, column: VectorType, np_array: NDArray, sqlconn: sqlite3.Connection) -> None:
+    """
+    Serialise a NumPy array as float32 bytes and store it in *column*.
+    """
     
+    blob = np_array.astype(np.float32).tobytes()
+    sql = f"UPDATE page_vector SET {column} = :blob WHERE page_id = :page_id"
+    logger.debug(f"SQL update statement: {sql}")
+    try:
+        sqlconn.execute(sql, {'blob': blob, 'page_id': page_id})
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Failed to store blob for page {page_id}: {e}")
+        raise
+
+def store_three_d_vector(page_id: int, vector: Vector3D, sqlconn: sqlite3.Connection) -> None:
+    """Serialise *data* to JSON and store it in *column*.
+
+    Currently used for ``three_d_vector`` (JSON array ``[x, y, z]``).
+    """
+    json_str = json.dumps(vector)
+    sql = f"UPDATE page_vector SET three_d_vector = ? WHERE page_id = ?"
+    try:
+        sqlconn.execute(sql, (json_str, page_id))
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Failed to store JSON for page {page_id}: {e}")
+        raise
+
+def get_page_embeddings(sqlconn: sqlite3.Connection) -> Iterator[tuple[int, Optional[NDArray]]]:
+    """
+    Yield tuples containing ``page_id`` and ``embedding_vector`` in NumPy array form.
+    """
+    sql = f"SELECT page_id, embedding_vector FROM page_vector"
+    cursor = sqlconn.execute(sql)
+    for row in cursor:
+        page_id = row["page_id"]
+        vector_blob = row["embedding_vector"]
+        vector = bytes_to_numpy(vector_blob)
+        yield (page_id, vector)
+
+def get_page_reduced_vectors(sqlconn: sqlite3.Connection) -> Iterator[tuple[int, Optional[NDArray]]]:
+    """
+    Yield tuples containing ``page_id`` and ``reduced_vector`` in NumPy array form.
+    """
+    sql = f"SELECT page_id, reduced_vector FROM page_vector"
+    cursor = sqlconn.execute(sql)
+    for row in cursor:
+        page_id = row["page_id"]
+        vector_blob = row["reduced_vector"]
+        vector = bytes_to_numpy(vector_blob)
+        yield (page_id, vector)
+
+def update_embeddings_for_page(page_id: int, embedding_vector: NDArray, sqlconn: sqlite3.Connection) -> None:
+    # convert numpy arrays to bytes for storage
+    embedding_vector_bytes = numpy_to_bytes(embedding_vector)
+    prepared_data = { 'page_id': page_id, 'embedding_vector': embedding_vector_bytes }
     update_page_vector_sql = """
-            UPDATE page_log 
-            SET embedding_vector = :embedding_vector,
-                reduced_vector = :reduced_vector,
-                three_d_vector = :three_d_vector
-            WHERE page_id = :page_id
-            """
+        INSERT INTO page_vector (page_id, embedding_vector) VALUES (:page_id, :embedding_vector)
+        ON CONFLICT(page_id) DO
+        UPDATE SET embedding_vector = :embedding_vector WHERE page_id = :page_id;
+        """
     
     try:
         cursor = sqlconn.cursor()
@@ -231,18 +307,56 @@ def update_embeddings_for_page(page_data: dict, sqlconn: sqlite3.Connection) -> 
     except sqlite3.Error as e:
         try:
             sqlconn.rollback()
-        except Exception as e:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e}")
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
             pass
-        logger.exception(f"Failed to update page embedding for page {page_data['page_id']}: {e}")
+        logger.exception(f"Failed to update embedding vector for page {page_id}: {e}")
         raise
 
-    #np.frombuffer(blob_data, dtype=np.float32)
+def update_reduced_vector_for_page(page_id: int, reduced_vector: NDArray, sqlconn: sqlite3.Connection) -> None:
+    # convert numpy arrays to bytes for storage
+    reduced_vector_bytes = numpy_to_bytes(reduced_vector)
+    prepared_data = { 'page_id': page_id, 'reduced_vector': reduced_vector_bytes }
+    update_page_vector_sql = "UPDATE page_vector SET reduced_vector = :reduced_vector WHERE page_id = :page_id;"
+    
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(update_page_vector_sql, prepared_data)
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to update reduced vector for page {page_id}: {e}")
+        raise
+
+def update_three_d_vector_for_page(page_id: int, vector: Vector3D, sqlconn: sqlite3.Connection) -> None:
+    # convert numpy arrays to bytes for storage
+    vector_text = three_d_vector_to_text(vector)
+    prepared_data = { 'page_id': page_id, 'three_d_vector': vector_text }
+    update_page_vector_sql = "UPDATE page_log SET three_d_vector = :vector_text WHERE page_id = :page_id;"
+    
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(update_page_vector_sql, prepared_data)
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to update reduced vector for page {page_id}: {e}")
+        raise
+
 
 def get_page_ids_needing_embedding_for_chunk(chunk_name: str, sqlconn: sqlite3.Connection) -> list[int]:
     select_sql = """
         SELECT page_id 
         FROM page_log
+        LEFT OUTER JOIN page_vector USING(page_id)
         WHERE chunk_name = :chunk_name
         AND embedding_vector IS NULL
         ORDER BY page_id ASC;
