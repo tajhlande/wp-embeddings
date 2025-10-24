@@ -168,7 +168,8 @@ def compute_embeddings_for_chunk(
         counter += 1
         tracker.update(1) if tracker else None
 
-    # logger.info("Computed and stored embeddings for %d pages in chunk %s in %.2f seconds", counter, chunk_name, elapsed())
+    # logger.info("Computed and stored embeddings for %d pages
+    # in chunk %s in %.2f seconds", counter, chunk_name, elapsed())
 
 
 EMBEDDING_MODEL_NAME_KEY = "EMBEDDING_MODEL_NAME"
@@ -199,7 +200,8 @@ def get_embedding_model_config() -> tuple[str, str, str]:
         missing_env_vars.append(EMBEDDING_MODEL_API_KEY_KEY)
     if missing_env_vars:
         raise ValueError(
-            f"Missing required environment variables: {', '.join(missing_env_vars)}\n Add them to .env or to enviroment by other means."
+            f"Missing required environment variables: {', '.join(missing_env_vars)}\n"
+            f"Add them to .env or to enviroment by other means."
         )
     embedding_model_api_url = os.environ[EMBEDDING_MODEL_API_URL_KEY]
     embedding_model_api_key = os.environ[EMBEDDING_MODEL_API_KEY_KEY]

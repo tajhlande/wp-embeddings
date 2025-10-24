@@ -161,13 +161,13 @@ def three_d_vector_to_text(vector: Optional[Vector3D]) -> Optional[str]:
 
 def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
     page_data_upsert_sql = """
-        INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract) 
+        INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract)
         VALUES(:page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)
-        ON CONFLICT(page_id) DO UPDATE 
+        ON CONFLICT(page_id) DO UPDATE
         SET title = :title,
             chunk_name = :chunk_name,
             url = :url,
-            extracted_at = CURRENT_TIMESTAMP,           
+            extracted_at = CURRENT_TIMESTAMP,
             abstract = :abstract
         """
 
@@ -190,7 +190,7 @@ def upsert_new_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
     upsert_sql = """
         INSERT INTO chunk_log(chunk_name, namespace, downloaded_at, completed_at)
           VALUES(:chunk_name, :namespace, NULL, NULL)
-          ON CONFLICT(chunk_name) DO UPDATE 
+          ON CONFLICT(chunk_name) DO UPDATE
           SET chunk_name = :chunk_name, downloaded_at = NULL, completed_at = NULL;
         """
     try:
@@ -212,7 +212,7 @@ def upsert_new_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
 
 def update_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
     update_sql = """
-        UPDATE chunk_log 
+        UPDATE chunk_log
         SET chunk_archive_path = :chunk_archive_path,
             chunk_extracted_path = :chunk_extracted_path,
             downloaded_at = :downloaded_at,
@@ -262,7 +262,7 @@ def get_embedding_count(namespace: str, sqlconn: sqlite3.Connection) -> int:
         FROM page_vector
         INNER JOIN page_log ON page_vector.page_id = page_log.page_id
         INNER JOIN chunk_log ON chunk_log.chunk_name = page_log.chunk_name
-        WHERE embedding_vector IS NOT NULL 
+        WHERE embedding_vector IS NOT NULL
         AND chunk_log.namespace = :namespace
     """
 
@@ -278,7 +278,7 @@ def get_reduced_vector_count(namespace: str, sqlconn: sqlite3.Connection) -> int
         FROM page_vector
         INNER JOIN page_log ON page_vector.page_id = page_log.page_id
         INNER JOIN chunk_log ON chunk_log.chunk_name = page_log.chunk_name
-        WHERE reduced_vector IS NOT NULL 
+        WHERE reduced_vector IS NOT NULL
         AND chunk_log.namespace = :namespace
     """
 
@@ -331,7 +331,7 @@ def store_three_d_vector(
     Currently used for ``three_d_vector`` (JSON array ``[x, y, z]``).
     """
     json_str = json.dumps(vector)
-    sql = f"UPDATE page_vector SET three_d_vector = ? WHERE page_id = ?"
+    sql = "UPDATE page_vector SET three_d_vector = ? WHERE page_id = ?"
     try:
         sqlconn.execute(sql, (json_str, page_id))
         sqlconn.commit()
@@ -346,7 +346,7 @@ def get_page_embeddings(
     """
     Yield tuples containing ``page_id`` and ``embedding_vector`` in NumPy array form.
     """
-    sql = f"SELECT page_id, embedding_vector FROM page_vector"
+    sql = "SELECT page_id, embedding_vector FROM page_vector"
     cursor = sqlconn.execute(sql)
     for row in cursor:
         page_id = row["page_id"]
@@ -361,7 +361,7 @@ def get_page_reduced_vectors(
     """
     Yield tuples containing ``page_id`` and ``reduced_vector`` in NumPy array form.
     """
-    sql = f"SELECT page_id, reduced_vector FROM page_vector"
+    sql = "SELECT page_id, reduced_vector FROM page_vector"
     cursor = sqlconn.execute(sql)
     for row in cursor:
         page_id = row["page_id"]
@@ -479,7 +479,7 @@ def get_page_ids_needing_embedding_for_chunk(
     chunk_name: str, sqlconn: sqlite3.Connection
 ) -> list[int]:
     select_sql = """
-        SELECT page_id 
+        SELECT page_id
         FROM page_log
         LEFT OUTER JOIN page_vector USING(page_id)
         WHERE chunk_name = :chunk_name

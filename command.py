@@ -302,12 +302,24 @@ class DownloadChunksCommand(Command):
             # Get chunks that need downloading
             if namespace:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace FROM chunk_log WHERE namespace = ? AND downloaded_at IS NULL ORDER BY chunk_name ASC LIMIT ?",
+                    """
+                    SELECT chunk_name, namespace
+                    FROM chunk_log
+                    WHERE namespace = ?
+                    AND downloaded_at IS NULL
+                    ORDER BY chunk_name ASC LIMIT ?;
+                    """,
                     (namespace, limit),
                 )
             else:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace FROM chunk_log WHERE downloaded_at IS NULL ORDER BY namespace ASC, chunk_name ASC LIMIT ?",
+                    """
+                    SELECT chunk_name, namespace
+                    FROM chunk_log
+                    WHERE downloaded_at IS NULL
+                    ORDER BY namespace ASC, chunk_name ASC
+                    LIMIT ?
+                    """,
                     (limit,),
                 )
 
@@ -355,13 +367,17 @@ class DownloadChunksCommand(Command):
 
                     # Update database
                     sqlconn.execute(
-                        "UPDATE chunk_log SET chunk_archive_path = ?, downloaded_at = CURRENT_TIMESTAMP WHERE chunk_name = ?",
+                        """
+                        UPDATE chunk_log
+                        SET chunk_archive_path = ?, downloaded_at = CURRENT_TIMESTAMP
+                        WHERE chunk_name = ?
+                        """,
                         (chunk_file_path, chunk_name),
                     )
                     sqlconn.commit()
 
                     downloaded_count += 1
-                    logger.debug(f"Downloaded %s", chunk_name)
+                    logger.debug("Downloaded %s", chunk_name)
 
                 except Exception as e:
                     logger.error(f"Failed to download {chunk_name}: {e}")
@@ -417,12 +433,25 @@ class UnpackProcessChunksCommand(Command):
             # Get chunks that need unpacking
             if namespace:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE namespace = ? AND chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL ORDER BY chunk_name ASC",
+                    """
+                    SELECT chunk_name, namespace, chunk_archive_path
+                    FROM chunk_log
+                    WHERE namespace = ?
+                    AND chunk_archive_path IS NOT NULL
+                    AND chunk_extracted_path IS NULL
+                    ORDER BY chunk_name ASC
+                    """,
                     (namespace,),
                 )
             else:
                 cursor = sqlconn.execute(
-                    "SELECT chunk_name, namespace, chunk_archive_path FROM chunk_log WHERE chunk_archive_path IS NOT NULL AND chunk_extracted_path IS NULL ORDER BY namespace ASC, chunk_name ASC"
+                    """
+                    SELECT chunk_name, namespace, chunk_archive_path
+                    FROM chunk_log
+                    WHERE chunk_archive_path IS NOT NULL
+                    AND chunk_extracted_path IS NULL
+                    ORDER BY namespace ASC, chunk_name ASC
+                    """
                 )
 
             chunks_to_unpack = cursor.fetchall()
@@ -519,7 +548,10 @@ class UnpackProcessChunksCommand(Command):
                     logger.error(f"Failed to unpack {chunk_name}: {e}")
                     continue
 
-            return f"✓ Unpacked and processed {processed_count} chunk(s). Processed {total_pages} pages from {processed_count} chunks"
+            return (
+                f"✓ Unpacked and processed {processed_count} chunk(s). "
+                f"Processed {total_pages} pages from {processed_count} chunks"
+            )
 
         except Exception as e:
             logger.error(f"Failed to unpack chunks: {e}")
@@ -630,9 +662,9 @@ class EmbedPagesCommand(Command):
 
                 cursor = sqlconn.execute(
                     """
-                    SELECT DISTINCT chunk_name 
-                    FROM page_log 
-                    LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id 
+                    SELECT DISTINCT chunk_name
+                    FROM page_log
+                    LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id
                     WHERE page_vector.embedding_vector IS NULL;
                     """
                 )
@@ -734,19 +766,20 @@ class ReduceCommand(Command):
             print(f"Target dimension: {target_dim}, batch size: {batch_size}")
 
             if target_dim > batch_size:
-                return (
-                    f"✗ Batch size must be equal to or greater than target dimension."
-                )
+                return "✗ Batch size must be equal to or greater than target dimension."
 
             estimated_vector_count = get_embedding_count(namespace, sqlconn)
             estimated_batch_count = estimated_vector_count // batch_size + 1
 
             if estimated_vector_count < target_dim:
-                return f"✗ Only found {estimated_vector_count} records, need at least {target_dim} to do PCA at that dimension"
+                return (
+                    f"✗ Only found {estimated_vector_count} records, "
+                    f"need at least {target_dim} to do PCA at that dimension"
+                )
 
             if estimated_vector_count < batch_size:
                 print(
-                    f"Reducing batch size to match estimated vector count: %d",
+                    "Reducing batch size to match estimated vector count: %d",
                     estimated_vector_count,
                 )
                 batch_size = estimated_vector_count
@@ -763,7 +796,10 @@ class ReduceCommand(Command):
                     batch_size=batch_size,
                     tracker=tracker,
                 )
-            return f"✓ Reduced {total_vector_count} page embeddings in {batch_count} batch{'' if batch_count == 1 else 'es'}"
+            return (
+                f"✓ Reduced {total_vector_count} page embeddings in {batch_count} "
+                f"batch{'' if batch_count == 1 else 'es'}"
+            )
         except Exception as e:
             logger.exception(f"Failed to reduce embeddings: {e}")
             return f"✗ Failed to reduce embeddings: {e}"
@@ -837,27 +873,45 @@ class StatusCommand(Command):
             # Get chunk statistics
             chunk_cursor = sqlconn.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(*) as total_chunks,
                     SUM(CASE WHEN downloaded_at IS NOT NULL THEN 1 ELSE 0 END) as downloaded_chunks,
                     SUM(CASE WHEN chunk_extracted_path IS NOT NULL THEN 1 ELSE 0 END) as extracted_chunks
-                FROM chunk_log                     
+                FROM chunk_log
             """
             )
             chunk_stats = chunk_cursor.fetchone()
 
             chunk_completion_cursor = sqlconn.execute(
                 """
-                SELECT SUM(CASE WHEN total_pages > 0 AND pending_embeddings = 0 THEN 1 ELSE 0 END) as "complete_chunks",
-                       SUM(CASE WHEN total_pages = 0 OR pending_embeddings > 0 THEN 1 ELSE 0 END) as "incomplete_chunks",
+                SELECT SUM(CASE
+                           WHEN total_pages > 0 AND pending_embeddings = 0
+                           THEN 1
+                           ELSE 0 END) as "complete_chunks",
+                       SUM(CASE
+                           WHEN total_pages = 0 OR pending_embeddings > 0
+                           THEN 1
+                           ELSE 0 END) as "incomplete_chunks",
                        SUM(pending_embeddings) as "pending_embeddings_count",
                        SUM(completed_embeddings) as "completed_embeddings_count",
-                       SUM(total_pages) as "total_pages_count" 
+                       SUM(total_pages) as "total_pages_count"
                     FROM (
-                        SELECT chunk_log.chunk_name, 
-                           CASE WHEN SUM(CASE WHEN page_vector.embedding_vector IS NULL THEN 1 ELSE 0 END) = 0 AND SUM(page_log.page_id) > 0 THEN 1 ELSE 0 END as is_complete,
-                           SUM(CASE WHEN page_vector.embedding_vector IS NULL and page_log.page_id IS NOT NULL THEN 1 ELSE 0 END) as pending_embeddings,
-                           SUM(CASE WHEN page_vector.embedding_vector IS NULL THEN 0 ELSE 1 END) as completed_embeddings,
+                        SELECT chunk_log.chunk_name,
+                           CASE
+                           WHEN SUM(CASE
+                                    WHEN page_vector.embedding_vector IS NULL
+                                    THEN 1
+                                    ELSE 0 END) = 0 AND SUM(page_log.page_id) > 0
+                           THEN 1
+                           ELSE 0 END as is_complete,
+                           SUM(CASE
+                               WHEN page_vector.embedding_vector IS NULL and page_log.page_id IS NOT NULL
+                               THEN 1
+                               ELSE 0 END) as pending_embeddings,
+                           SUM(CASE
+                               WHEN page_vector.embedding_vector IS NULL
+                               THEN 0
+                               ELSE 1 END) as completed_embeddings,
                            COUNT(page_log.page_id) as total_pages
                         FROM chunk_log
                         LEFT JOIN page_log ON chunk_log.chunk_name = page_log.chunk_name
@@ -871,7 +925,7 @@ class StatusCommand(Command):
             # Get page statistics
             page_cursor = sqlconn.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(*) as total_pages,
                     SUM(CASE WHEN embedding_vector IS NOT NULL THEN 1 ELSE 0 END) as pages_with_embeddings
                 FROM page_log
@@ -880,19 +934,29 @@ class StatusCommand(Command):
             )
             page_stats = page_cursor.fetchone()
 
-            status_text = f"System Status:\n"
-            status_text += f"Chunks: {chunk_stats['total_chunks']} total, {chunk_stats['downloaded_chunks']} downloaded, {chunk_stats['extracted_chunks']} extracted\n"
-            status_text += f"Pages: {page_stats['total_pages']} total, {page_stats['pages_with_embeddings']} with embeddings\n"
-            status_text += f"Chunk Completion: {chunk_completion_stats['complete_chunks']} complete, {chunk_completion_stats['incomplete_chunks']} incomplete\n"
-            status_text += f"Page Completion: {chunk_completion_stats['pending_embeddings_count']} pending embeddings, {chunk_completion_stats['completed_embeddings_count']} complete, {chunk_completion_stats['total_pages_count']} total pages.\n"
+            status_text = "System Status:\n"
+            status_text += f"Chunks: {chunk_stats['total_chunks']} total, "
+            status_text += f"{chunk_stats['downloaded_chunks']} downloaded, "
+            status_text += f"{chunk_stats['extracted_chunks']} extracted\n"
+            status_text += f"Pages: {page_stats['total_pages']} total, "
+            status_text += f"{page_stats['pages_with_embeddings']} with embeddings\n"
+            status_text += f"Chunk Completion: {chunk_completion_stats['complete_chunks']} complete, "
+            status_text += f"{chunk_completion_stats['incomplete_chunks']} incomplete\n"
+            status_text += f"Page Completion: {chunk_completion_stats['pending_embeddings_count']} pending embeddings, "
+            status_text += (
+                f"{chunk_completion_stats['completed_embeddings_count']} complete, "
+            )
+            status_text += (
+                f"{chunk_completion_stats['total_pages_count']} total pages.\n"
+            )
 
             # Get namespace breakdown
             namespace_cursor = sqlconn.execute(
                 """
-                SELECT namespace, 
+                SELECT namespace,
                        COUNT(*) as chunk_count,
                        SUM(CASE WHEN downloaded_at IS NOT NULL THEN 1 ELSE 0 END) as downloaded_count
-                FROM chunk_log 
+                FROM chunk_log
                 GROUP BY namespace
                 ORDER BY namespace
             """
@@ -900,7 +964,8 @@ class StatusCommand(Command):
 
             status_text += "\nNamespace breakdown:\n"
             for row in namespace_cursor.fetchall():
-                status_text += f"  {row['namespace']}: {row['chunk_count']} chunks, {row['downloaded_count']} downloaded\n"
+                status_text += f"  {row['namespace']}: {row['chunk_count']} chunks, "
+                status_text += f"   {row['downloaded_count']} downloaded\n"
 
             return status_text
 

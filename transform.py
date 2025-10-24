@@ -17,16 +17,10 @@ from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger(__name__)
 import sqlite3
-from typing import Iterable, List, Optional
-
 import numpy as np
 
-logger.info("Initializing scikit-learn...")
-from sklearn.decomposition import IncrementalPCA
-from sklearn.cluster import MiniBatchKMeans
-import umap.umap_ as umap
+from typing import Iterable, List, Optional
 
 from database import (
     update_cluster_centroid,
@@ -34,6 +28,15 @@ from database import (
     update_three_d_vector_for_page,
 )
 from progress_utils import ProgressTracker
+
+logger = logging.getLogger(__name__)
+
+# we are logging here because these import statements are sooooo slooooow
+logger.info("Initializing scikit-learn...")
+from sklearn.decomposition import IncrementalPCA  # noqa E402
+from sklearn.cluster import MiniBatchKMeans  # noqa E402
+import umap.umap_ as umap  # noqa E402
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +58,8 @@ def _batch_iterator(
         # ordering, but for our use-case ordering is not required - we simply
         # fetch a limited number of rows each iteration.
         sql = f"""
-            SELECT page_vector.page_id, {', '.join(columns)} 
-            FROM page_vector 
+            SELECT page_vector.page_id, {', '.join(columns)}
+            FROM page_vector
             INNER JOIN page_log ON page_vector.page_id = page_log.page_id
             INNER JOIN chunk_log ON page_log.chunk_name = chunk_log.chunk_name
             WHERE chunk_log.namespace = :namespace

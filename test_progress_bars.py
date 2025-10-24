@@ -9,10 +9,10 @@ import tempfile
 import json
 import time
 
+from progress_utils import ProgressTracker
+
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from progress_utils import ProgressTracker
 
 
 def test_progress_tracker():
@@ -81,7 +81,7 @@ def simulate_chunk_parsing():
             with open(temp_file, "r") as f:
                 for line in f:
                     # Simulate processing
-                    data = json.loads(line)
+                    json.loads(line)
                     time.sleep(0.001)  # Simulate processing time
                     tracker.update(1)
 

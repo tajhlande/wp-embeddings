@@ -5,7 +5,6 @@ import logging
 import os
 import sqlite3
 import tarfile
-import time
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -96,7 +95,7 @@ def find_chunks(
         # "enwiki_namespace_0"
         snapshot_json = api_client.get_snapshot(namespace, request)
     except Exception as e:
-        logger.exception(f"Failed to get snapshot")
+        logger.exception(f"Failed to get snapshot: {e}")
         return
 
     try:
@@ -213,7 +212,7 @@ def parse_chunk_file(
         # logger.info(f"Parsing chunk file: {chunk_file_path}")
 
         # First, count total lines for progress tracking
-        total_lines = count_lines_in_file(chunk_file_path)
+        count_lines_in_file(chunk_file_path)
         # logger.info(f"Found {total_lines} lines to process")
 
         # Parse with progress bar - reduce logging frequency to avoid interference
@@ -288,7 +287,7 @@ def fetch_and_extract():
                 "enwiki_namespace_0", "enwiki_namespace_0_chunk_0", request
             )
         except Exception as e:
-            logger.exception(f"Failed to get chunk info")
+            logger.exception(f"Failed to get chunk info: {e}")
             return
         logger.info(f"Chunk info:\n{json.dumps(chunk_info_json, indent=2)}")
 
@@ -328,7 +327,11 @@ def get_chunk_info_for_namespace(
     logger.info(f"Fetching chunk metadata for namespace: {namespace}")
     request = Request(filters=[Filter(field="in_language.identifier", value="en")])
     chunk_data_list: list[dict] = api_client.get_chunks(namespace, request)
-    chunk_list = [Chunk(chunk_name=chunk_data.get("identifier"), namespace=namespace) for chunk_data in chunk_data_list if chunk_data.get("identifier")]  # type: ignore
+    chunk_list = [
+        Chunk(chunk_name=chunk_data.get("identifier"), namespace=namespace)  # type: ignore
+        for chunk_data in chunk_data_list
+        if chunk_data.get("identifier")
+    ]
     for chunk in chunk_list:
         # logger.info(f"Found chunk: {json.dumps(chunk_data)}")
         upsert_new_chunk_data(chunk, sqlconn)

@@ -147,7 +147,7 @@ def test_kmeans_basic():
     # Test the run_kmeans function
     try:
         run_kmeans(conn, namespace, n_clusters=10, batch_size=50)
-        print(f"Success! K-means clustering completed")
+        print("Success! K-means clustering completed")
 
         # Verify that cluster assignments were stored
         cursor = conn.execute(
@@ -166,14 +166,24 @@ def test_kmeans_basic():
 
         # Verify that all pages have been assigned to clusters
         cursor = conn.execute(
-            "SELECT MIN(cluster_id) as min_cluster, MAX(cluster_id) as max_cluster FROM page_vector WHERE cluster_id IS NOT NULL"
+            """
+            SELECT MIN(cluster_id) as min_cluster, MAX(cluster_id) as max_cluster
+            FROM page_vector
+            WHERE cluster_id IS NOT NULL
+            """
         )
         result = cursor.fetchone()
         print(f'Cluster range: {result["min_cluster"]} to {result["max_cluster"]}')
 
         # Check that all expected clusters have at least one page
         cursor = conn.execute(
-            "SELECT cluster_id, COUNT(*) as count FROM page_vector WHERE cluster_id IS NOT NULL GROUP BY cluster_id ORDER BY cluster_id"
+            """
+            SELECT cluster_id, COUNT(*) as count
+            FROM page_vector
+            WHERE cluster_id IS NOT NULL
+            GROUP BY cluster_id
+            ORDER BY cluster_id
+            """
         )
         cluster_assignments = cursor.fetchall()
         print(
@@ -236,7 +246,7 @@ def test_kmeans_edge_cases():
     # Test with fewer clusters than vectors (more realistic scenario)
     try:
         run_kmeans(conn, namespace, n_clusters=3, batch_size=3)
-        print(f"Success! K-means with fewer clusters than vectors completed")
+        print("Success! K-means with fewer clusters than vectors completed")
 
         # Verify that cluster assignments were stored
         cursor = conn.execute(
@@ -255,7 +265,13 @@ def test_kmeans_edge_cases():
 
         # Check distribution across clusters
         cursor = conn.execute(
-            "SELECT cluster_id, COUNT(*) as count FROM page_vector WHERE cluster_id IS NOT NULL GROUP BY cluster_id ORDER BY cluster_id"
+            """
+            SELECT cluster_id, COUNT(*) as count
+            FROM page_vector
+            WHERE cluster_id IS NOT NULL
+            GROUP BY cluster_id
+            ORDER BY cluster_id
+            """
         )
         cluster_assignments = cursor.fetchall()
         print(
@@ -436,7 +452,12 @@ def test_kmeans_centroids():
 
         # Verify that cluster assignments exist and are consistent with centroids
         cursor = conn.execute(
-            "SELECT cluster_id, COUNT(*) as count FROM page_vector WHERE cluster_id IS NOT NULL GROUP BY cluster_id ORDER BY cluster_id"
+            """
+            SELECT cluster_id, COUNT(*) as count
+            FROM page_vector
+            WHERE cluster_id IS NOT NULL
+            GROUP BY cluster_id
+            ORDER BY cluster_id"""
         )
         cluster_assignments = cursor.fetchall()
 
