@@ -31,6 +31,7 @@ class PageVectors:
 @dataclass
 class ClusterInfo:
     cluster_id: int
+    namespace: str
     centroid_3d: Optional[str] = None  # Stored as JSON string
     cluster_name: Optional[str] = None
     cluster_description: Optional[str] = None

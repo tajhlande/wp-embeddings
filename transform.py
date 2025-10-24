@@ -32,6 +32,7 @@ from database import (
     get_sql_conn,
     get_page_embeddings,
     get_page_reduced_vectors,
+    update_cluster_centroid,
     update_reduced_vector_for_page,
     update_three_d_vector_for_page,
 )
@@ -202,23 +203,6 @@ def run_kmeans(sqlconn: sqlite3.Connection,
             cluster_ids.extend(batch_cluster_ids)
             ids.extend(batch_ids)
             tracker.update(1) if tracker else None
-    # else:
-    #     # Use standard KMeans (original approach)
-    #     rows = []
-    #     ids = []
-    #     for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
-    #         for row in batch:
-    #             ids.append(row["page_id"])
-    #             rows.append(np.frombuffer(row["reduced_vector"], dtype=np.float32))
-    #         tracker.update(1) if tracker else None
-        
-    #     if not rows:
-    #         logger.warning("No reduced vectors found - aborting K-Means.")
-    #         return
-        
-    #     X = np.vstack(rows)
-    #     kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    #     cluster_ids = kmeans.fit_predict(X)
 
     # Store cluster ids and initialise cluster_info entries.
     for page_id, cl_id in zip(ids, cluster_ids):
@@ -229,11 +213,15 @@ def run_kmeans(sqlconn: sqlite3.Connection,
         )
         # Ensure a row exists in cluster_info; centroid will be updated later.
         sqlconn.execute(
-            "INSERT OR IGNORE INTO cluster_info (cluster_id) VALUES (?)",
-            (int(cl_id),),
+            "INSERT OR IGNORE INTO cluster_info (cluster_id, namespace) VALUES (?, ?)",
+            (int(cl_id), namespace),
         )
     
-    sqlconn.commit()
+    # Save cluster centroids as BLOB
+    logger.info("Saving cluster centroids...")
+    for cluster_id in range(n_clusters):
+        centroid = kmeans.cluster_centers_[cluster_id]
+        update_cluster_centroid(cluster_id, namespace, centroid, sqlconn)
     logger.info("K-Means clustering completed and assignments stored.")
 
 

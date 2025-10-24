@@ -39,18 +39,21 @@ def ensure_tables(sqlconn: sqlite3.Connection):
     page_vector_table_sql = """
         CREATE TABLE IF NOT EXISTS page_vector (
             page_id INTEGER PRIMARY KEY REFERENCES page_log(page_id) ON DELETE CASCADE,
-            embedding_vector BLOB,    -- original 2048‑dim numpy array (float32)
-            reduced_vector BLOB,      -- PCA‑reduced 100‑dim array (float32)
+            embedding_vector BLOB,    -- original 2048-dim numpy array (float32)
+            reduced_vector BLOB,      -- PCA-reduced 100-dim array (float32)
             cluster_id INTEGER,       -- FK to cluster_info.cluster_id
             three_d_vector TEXT       -- JSON "[x, y, z]"
         );
         """
     cluster_info_table_sql = """
         CREATE TABLE IF NOT EXISTS cluster_info (
-            cluster_id INTEGER PRIMARY KEY,
+            cluster_id INTEGER NOT NULL,
+            namespace TEXT NOT NULL,
             centroid_3d TEXT,         -- JSON "[x, y, z]"
+            centroid_vector BLOB,     -- Full centroid vector as float32 bytes
             cluster_name TEXT,
-            cluster_description TEXT
+            cluster_description TEXT,
+            PRIMARY KEY (cluster_id, namespace)
         );
         """
     try:
@@ -364,7 +367,7 @@ def update_reduced_vector_for_page(page_id: int, reduced_vector: NDArray, sqlcon
         raise
 
 def update_three_d_vector_for_page(page_id: int, vector: Vector3D, sqlconn: sqlite3.Connection) -> None:
-    # convert numpy arrays to bytes for storage
+    # convert vector to text for storage
     vector_text = three_d_vector_to_text(vector)
     prepared_data = { 'page_id': page_id, 'three_d_vector': vector_text }
     update_page_vector_sql = "UPDATE page_log SET three_d_vector = :vector_text WHERE page_id = :page_id;"
@@ -382,6 +385,22 @@ def update_three_d_vector_for_page(page_id: int, vector: Vector3D, sqlconn: sqli
         logger.exception(f"Failed to update reduced vector for page {page_id}: {e}")
         raise
 
+def update_cluster_centroid(cluster_id: int, namespace: str, centroid_vector: NDArray, sqlconn: sqlite3.Connection) -> None:
+    centroid_blob = numpy_to_bytes(centroid_vector)
+    try:
+        sqlconn.execute(
+            "UPDATE cluster_info SET centroid_vector = ? WHERE cluster_id = ? AND namespace = ?",
+            (centroid_blob, int(cluster_id), namespace),
+        )
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to update cluster centroid for cluster {cluster_id} in namespace {namespace}: {e}")
+        raise
 
 def get_page_ids_needing_embedding_for_chunk(chunk_name: str, sqlconn: sqlite3.Connection) -> list[int]:
     select_sql = """
