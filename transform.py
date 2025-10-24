@@ -15,7 +15,6 @@ operate directly on the SQLite database via the helper utilities defined in
 
 from __future__ import annotations
 
-import json
 import logging
 logger = logging.getLogger(__name__)
 import sqlite3
@@ -25,13 +24,10 @@ import numpy as np
 
 logger.info("Initializing scikit-learn...")
 from sklearn.decomposition import IncrementalPCA
-from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.cluster import MiniBatchKMeans
 import umap.umap_ as umap
 
 from database import (
-    get_sql_conn,
-    get_page_embeddings,
-    get_page_reduced_vectors,
     update_cluster_centroid,
     update_reduced_vector_for_page,
     update_three_d_vector_for_page,
@@ -187,7 +183,7 @@ def run_kmeans(sqlconn: sqlite3.Connection,
         return
     
     # Second pass: predict on batches to get cluster assignments
-    logger.info("Predicting cluster assignments...")
+    # logger.info("Predicting cluster assignments...")
     cluster_ids = []
     for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
         batch_vectors = []

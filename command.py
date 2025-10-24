@@ -804,6 +804,7 @@ class CommandInterpreter:
         self.parser.register_command(UnpackProcessChunksCommand())
         self.parser.register_command(EmbedPagesCommand())
         self.parser.register_command(ReduceCommand())
+        self.parser.register_command(ClusterCommand())
         self.parser.register_command(StatusCommand())
         self.parser.register_command(HelpCommand(self.parser))
     
