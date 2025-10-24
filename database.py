@@ -237,6 +237,22 @@ def get_embedding_count(namespace: str, sqlconn: sqlite3.Connection) -> int:
     row = cursor.fetchone()
     return row[0]
 
+def get_reduced_vector_count(namespace: str, sqlconn: sqlite3.Connection) -> int:
+    
+    select_sql = """
+        SELECT COUNT(reduced_vector)
+        FROM page_vector
+        INNER JOIN page_log ON page_vector.page_id = page_log.page_id
+        INNER JOIN chunk_log ON chunk_log.chunk_name = page_log.chunk_name
+        WHERE reduced_vector IS NOT NULL 
+        AND chunk_log.namespace = :namespace
+    """
+
+    cursor = sqlconn.execute(select_sql, {'namespace': namespace})
+    row = cursor.fetchone()
+    return row[0]
+
+
 def get_page_vectors(page_id: int, sqlconn: sqlite3.Connection) -> Optional[PageVectors]:
     select_sql = """
         SELECT page_id, embedding_vector, reduced_vector, cluster_id, three_d_vector

@@ -8,13 +8,13 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Any
 
 # Import existing modules
-from database import get_embedding_count, get_sql_conn, ensure_tables, get_page_ids_needing_embedding_for_chunk
+from database import get_embedding_count, get_reduced_vector_count, get_sql_conn, ensure_tables, get_page_ids_needing_embedding_for_chunk
 from download_chunks import count_lines_in_file, get_enterprise_auth_client, get_enterprise_api_client, \
                             get_chunk_info_for_namespace, download_chunk, \
                             extract_single_file_from_tar_gz, parse_chunk_file
 from index_pages import get_embedding_function, compute_embeddings_for_chunk, get_embedding_model_config
 from progress_utils import ProgressTracker
-from transform import run_pca
+from transform import run_kmeans, run_pca
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -596,6 +596,7 @@ class EmbedPagesCommand(Command):
             logger.exception(f"Failed to process pages: {e}")
             return f"✗ Failed to process pages: {e}"
 
+
 class ReduceCommand(Command):
     """Transform embedding vectors to a smaller vector space."""
 
@@ -622,9 +623,6 @@ class ReduceCommand(Command):
             if target_dim > batch_size:
                 return f"✗ Batch size must be equal to or greater than target dimension."
 
-            logger.info(f"Target dimension: {target_dim}")
-            logger.info(f"Batch size: {batch_size}")
-
             estimated_vector_count = get_embedding_count(namespace, sqlconn)
             estimated_batch_count = estimated_vector_count // batch_size + 1
 
@@ -641,6 +639,43 @@ class ReduceCommand(Command):
         except Exception as e:
             logger.exception(f"Failed to reduce embeddings: {e}")
             return f"✗ Failed to reduce embeddings: {e}"
+
+
+class ClusterCommand(Command):
+    """Cluster reduced vectors with k-means."""
+
+    def __init__(self):
+        super().__init__(
+            name="cluster",
+            description="Cluster reduced vectors with k-means",
+            required_args=['namespace'],
+            optional_args={'clusters': 100, 'batch-size': 10_000}
+        )
+
+    def execute(self, args: Dict[str, Any]) -> str:
+        try:
+            namespace = args['namespace']
+
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+
+            num_clusters = args.get('clusters', 100)
+            batch_size = args.get('batch-size', 10_000)
+
+            estimated_vector_count = get_reduced_vector_count(namespace, sqlconn)
+            estimated_batch_count = estimated_vector_count // batch_size + 1
+
+            if estimated_vector_count < batch_size:
+                print(f"Reducing batch size to match estimated vector count: {estimated_vector_count}")
+                batch_size = estimated_vector_count
+
+            with ProgressTracker("K-means Clustering (two pass)", unit="batches", total=estimated_batch_count*2) as tracker:
+                run_kmeans(sqlconn, namespace=namespace, n_clusters=num_clusters, batch_size=batch_size, tracker=tracker)
+            
+            return f"✓ Clustered reduced page embeddings in namespace {namespace} using incremental K-means"
+        except Exception as e:
+            logger.exception(f"Failed to cluster embeddings: {e}")
+            return f"✗ Failed to cluster embeddings: {e}"
 
 
 class StatusCommand(Command):

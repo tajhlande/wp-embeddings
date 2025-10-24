@@ -25,7 +25,7 @@ import numpy as np
 
 logger.info("Initializing scikit-learn...")
 from sklearn.decomposition import IncrementalPCA
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MiniBatchKMeans
 import umap.umap_ as umap
 
 from database import (
@@ -63,6 +63,7 @@ def _batch_iterator(
             INNER JOIN page_log ON page_vector.page_id = page_log.page_id
             INNER JOIN chunk_log ON page_log.chunk_name = chunk_log.chunk_name
             WHERE chunk_log.namespace = :namespace
+            {''.join([f"AND {column} IS NOT NULL " for column in columns])}
             ORDER BY chunk_log.chunk_name ASC, page_log.page_id ASC
             LIMIT {batch_size} OFFSET {offset};
             """
@@ -134,30 +135,90 @@ def run_pca(sqlconn: sqlite3.Connection, namespace: str, target_dim: int = 100, 
     return batch_counter, total_vectors
 
 
-def run_kmeans(sqlconn: sqlite3.Connection, 
+def run_kmeans(sqlconn: sqlite3.Connection,
                namespace: str,
                n_clusters: int = 100,
-               batch_size: int = 10_000) -> None:
+               batch_size: int = 10_000,
+               tracker: Optional[ProgressTracker] = None) -> None:
     """Cluster the PCA-reduced vectors and persist cluster assignments.
 
-    A standard ``KMeans`` model (fullbatch) is used because the reduced data
-    size (100 dimensions) comfortably fits in memory for the typical dataset.
+    Args:
+        sqlconn: SQLite database connection
+        namespace: Namespace to process
+        n_clusters: Number of clusters to create
+        batch_size: Batch size for processing
+        tracker: Optional progress tracker
+        use_incremental: If True, use MiniBatchKMeans for incremental processing.
+                        If False, use standard KMeans (loads all data into memory).
     """
-    logger.info("Fetching reduced vectors for K-Means (n_clusters=%s)", n_clusters)
+    # logger.info("Fetching reduced vectors for K-Means (n_clusters=%s, incremental=%s)",
+    #             n_clusters, use_incremental)
 
-    # Load all reduced vectors into memory - they are small enough.
-    rows = []
+    # if use_incremental:
+    # Use MiniBatchKMeans for incremental processing
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=batch_size)
     ids = []
+    partial_fit_done = False
+    
+    # First pass: partial fit on all batches
+    # logger.info("Performing partial fit on all batches...")
     for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
+        batch_vectors = []
+        batch_ids = []
         for row in batch:
-            ids.append(row["page_id"])
-            rows.append(np.frombuffer(row["reduced_vector"], dtype=np.float32))
-    if not rows:
+            batch_ids.append(row["page_id"])
+            vectors = np.frombuffer(row["reduced_vector"], dtype=np.float32)
+            batch_vectors.append(vectors)
+        
+        if batch_vectors:
+            batch_matrix = np.vstack(batch_vectors)
+            if not partial_fit_done:
+                kmeans.partial_fit(batch_matrix)
+                partial_fit_done = True
+            else:
+                kmeans.partial_fit(batch_matrix)
+            
+            ids.extend(batch_ids)
+        tracker.update(1) if tracker else None
+    
+    if not ids:
         logger.warning("No reduced vectors found - aborting K-Means.")
         return
-    X = np.vstack(rows)
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_ids = kmeans.fit_predict(X)
+    
+    # Second pass: predict on batches to get cluster assignments
+    logger.info("Predicting cluster assignments...")
+    cluster_ids = []
+    for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
+        batch_vectors = []
+        batch_ids = []
+        for row in batch:
+            batch_ids.append(row["page_id"])
+            vectors = np.frombuffer(row["reduced_vector"], dtype=np.float32)
+            batch_vectors.append(vectors)
+        
+        if batch_vectors:
+            batch_matrix = np.vstack(batch_vectors)
+            batch_cluster_ids = kmeans.predict(batch_matrix)
+            cluster_ids.extend(batch_cluster_ids)
+            ids.extend(batch_ids)
+            tracker.update(1) if tracker else None
+    # else:
+    #     # Use standard KMeans (original approach)
+    #     rows = []
+    #     ids = []
+    #     for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
+    #         for row in batch:
+    #             ids.append(row["page_id"])
+    #             rows.append(np.frombuffer(row["reduced_vector"], dtype=np.float32))
+    #         tracker.update(1) if tracker else None
+        
+    #     if not rows:
+    #         logger.warning("No reduced vectors found - aborting K-Means.")
+    #         return
+        
+    #     X = np.vstack(rows)
+    #     kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    #     cluster_ids = kmeans.fit_predict(X)
 
     # Store cluster ids and initialise cluster_info entries.
     for page_id, cl_id in zip(ids, cluster_ids):
@@ -171,6 +232,7 @@ def run_kmeans(sqlconn: sqlite3.Connection,
             "INSERT OR IGNORE INTO cluster_info (cluster_id) VALUES (?)",
             (int(cl_id),),
         )
+    
     sqlconn.commit()
     logger.info("K-Means clustering completed and assignments stored.")
 
