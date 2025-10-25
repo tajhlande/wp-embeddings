@@ -823,8 +823,8 @@ class ClusterCommand(Command):
             sqlconn = get_sql_conn()
             ensure_tables(sqlconn)
 
-            num_clusters = args.get("clusters", 100)
-            batch_size = args.get("batch-size", 10_000)
+            num_clusters = int(args.get("clusters", 100))
+            batch_size = int(args.get("batch-size", 10_000))
 
             estimated_vector_count = get_reduced_vector_count(namespace, sqlconn)
             estimated_batch_count = estimated_vector_count // batch_size + 1
@@ -834,6 +834,8 @@ class ClusterCommand(Command):
                     f"Reducing batch size to match estimated vector count: {estimated_vector_count}"
                 )
                 batch_size = estimated_vector_count
+
+            print(f"Clustering to {num_clusters} clusters in batches of {batch_size} in namespace {namespace}")
 
             with ProgressTracker(
                 "K-means Clustering (two pass)",

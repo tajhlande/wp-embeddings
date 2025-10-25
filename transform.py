@@ -30,6 +30,7 @@ from database import (
 from progress_utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG)
 
 # we are logging here because these import statements are sooooo slooooow
 logger.info("Initializing scikit-learn...")
@@ -216,25 +217,36 @@ def run_kmeans(
             ids.extend(batch_ids)
             tracker.update(1) if tracker else None
 
+    # clear old cluster_info entries
+    cursor = sqlconn.cursor()
+    cursor.execute(
+        "DELETE FROM cluster_info WHERE namespace = :namespace",
+        {'namespace': namespace}
+    )
+
     # Store cluster ids and initialise cluster_info entries.
     for page_id, cl_id in zip(ids, cluster_ids):
+        cluster_id_int = int(cl_id)
+        page_id_int = int(page_id)
         # Direct integer update for cluster_id
         sqlconn.execute(
-            "UPDATE page_vector SET cluster_id = ? WHERE page_id = ?",
-            (int(cl_id), page_id),
+            "UPDATE page_vector SET cluster_id = ? WHERE page_id = ?;",
+            (cluster_id_int, page_id_int),
         )
         # Ensure a row exists in cluster_info; centroid will be updated later.
+        logger.debug("INSERTing cluster id %d into namespace '%s'", cluster_id_int, namespace)
         sqlconn.execute(
-            "INSERT OR IGNORE INTO cluster_info (cluster_id, namespace) VALUES (?, ?)",
-            (int(cl_id), namespace),
+            "INSERT OR IGNORE INTO cluster_info (cluster_id, namespace) VALUES (?, ?);",
+            (cluster_id_int, namespace),
         )
+    sqlconn.commit()
 
     # Save cluster centroids as BLOB
-    logger.info("Saving cluster centroids...")
+    # logger.info("Saving cluster centroids...")
     for cluster_id in range(n_clusters):
         centroid = kmeans.cluster_centers_[cluster_id]
         update_cluster_centroid(cluster_id, namespace, centroid, sqlconn)
-    logger.info("K-Means clustering completed and assignments stored.")
+    # logger.info("K-Means clustering completed and assignments stored.")
 
 
 def run_umap_per_cluster(
