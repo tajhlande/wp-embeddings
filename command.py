@@ -896,12 +896,12 @@ class ProjectCommand(Command):
 
 
 class StatusCommand(Command):
-    """Show current system status."""
+    """Show current data status."""
 
     def __init__(self):
         super().__init__(
             name="status",
-            description="Show current system status",
+            description="Show current data status",
             required_args=[],
             optional_args={},
         )
@@ -925,26 +925,54 @@ class StatusCommand(Command):
 
             chunk_completion_cursor = sqlconn.execute(
                 """
-                SELECT SUM(CASE
+                SELECT
+                       SUM(CASE
                            WHEN total_pages > 0 AND pending_embeddings = 0
                            THEN 1
-                           ELSE 0 END) as "complete_chunks",
+                           ELSE 0 END) as "chunks_completed_embedding",
                        SUM(CASE
                            WHEN total_pages = 0 OR pending_embeddings > 0
                            THEN 1
-                           ELSE 0 END) as "incomplete_chunks",
+                           ELSE 0 END) as "chunks_pending_embedding",
                        SUM(pending_embeddings) as "pending_embeddings_count",
                        SUM(completed_embeddings) as "completed_embeddings_count",
+
+                       SUM(CASE
+                           WHEN total_pages > 0 AND pending_reduced = 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_completed_reduction",
+                       SUM(CASE
+                           WHEN total_pages = 0 OR pending_reduced > 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_pending_reduction",
+                       SUM(pending_reduced) as "pending_reduced_count",
+                       SUM(completed_reduced) as "completed_reduced_count",
+
+                       SUM(CASE
+                           WHEN total_pages > 0 AND pending_clustering = 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_completed_clustering",
+                       SUM(CASE
+                           WHEN total_pages = 0 OR pending_clustering > 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_pending_clustering",
+                       SUM(pending_clustering) as "pending_clustering_count",
+                       SUM(completed_clustering) as "completed_clustering_count",
+
+                       SUM(CASE
+                           WHEN total_pages > 0 AND pending_projection = 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_completed_projection",
+                       SUM(CASE
+                           WHEN total_pages = 0 OR pending_projection > 0
+                           THEN 1
+                           ELSE 0 END) as "chunks_pending_projection",
+                       SUM(pending_projection) as "pending_projection_count",
+                       SUM(completed_projection) as "completed_projection_count",
+
                        SUM(total_pages) as "total_pages_count"
                     FROM (
                         SELECT chunk_log.chunk_name,
-                           CASE
-                           WHEN SUM(CASE
-                                    WHEN page_vector.embedding_vector IS NULL
-                                    THEN 1
-                                    ELSE 0 END) = 0 AND SUM(page_log.page_id) > 0
-                           THEN 1
-                           ELSE 0 END as is_complete,
                            SUM(CASE
                                WHEN page_vector.embedding_vector IS NULL and page_log.page_id IS NOT NULL
                                THEN 1
@@ -953,6 +981,30 @@ class StatusCommand(Command):
                                WHEN page_vector.embedding_vector IS NULL
                                THEN 0
                                ELSE 1 END) as completed_embeddings,
+                           SUM(CASE
+                               WHEN page_vector.reduced_vector IS NULL and page_log.page_id IS NOT NULL
+                               THEN 1
+                               ELSE 0 END) as pending_reduced,
+                           SUM(CASE
+                               WHEN page_vector.reduced_vector IS NULL
+                               THEN 0
+                               ELSE 1 END) as completed_reduced,
+                           SUM(CASE
+                               WHEN page_vector.cluster_id IS NULL and page_log.page_id IS NOT NULL
+                               THEN 1
+                               ELSE 0 END) as pending_clustering,
+                           SUM(CASE
+                               WHEN page_vector.cluster_id IS NULL
+                               THEN 0
+                               ELSE 1 END) as completed_clustering,
+                           SUM(CASE
+                               WHEN page_vector.three_d_vector IS NULL and page_log.page_id IS NOT NULL
+                               THEN 1
+                               ELSE 0 END) as pending_projection,
+                           SUM(CASE
+                               WHEN page_vector.three_d_vector IS NULL
+                               THEN 0
+                               ELSE 1 END) as completed_projection,
                            COUNT(page_log.page_id) as total_pages
                         FROM chunk_log
                         LEFT JOIN page_log ON chunk_log.chunk_name = page_log.chunk_name
@@ -964,32 +1016,20 @@ class StatusCommand(Command):
             chunk_completion_stats = chunk_completion_cursor.fetchone()
 
             # Get page statistics
-            page_cursor = sqlconn.execute(
-                """
+            page_stats_sql = """
                 SELECT
                     COUNT(*) as total_pages,
-                    SUM(CASE WHEN embedding_vector IS NOT NULL THEN 1 ELSE 0 END) as pages_with_embeddings
+                    SUM(CASE WHEN embedding_vector IS NOT NULL THEN 1 ELSE 0 END) as embeddings,
+                    SUM(CASE WHEN reduced_vector IS NOT NULL THEN 1 ELSE 0 END) as reduced_vectors,
+                    SUM(CASE WHEN cluster_id IS NOT NULL THEN 1 ELSE 0 END) as clustered,
+                    SUM(CASE WHEN three_d_vector IS NOT NULL THEN 1 ELSE 0 END) as three_d_vectors
                 FROM page_log
                 LEFT JOIN page_vector ON page_log.page_id = page_vector.page_id
             """
-            )
+            page_cursor = sqlconn.execute(page_stats_sql)
             page_stats = page_cursor.fetchone()
 
-            status_text = "System Status:\n"
-            status_text += f"Chunks: {chunk_stats['total_chunks']} total, "
-            status_text += f"{chunk_stats['downloaded_chunks']} downloaded, "
-            status_text += f"{chunk_stats['extracted_chunks']} extracted\n"
-            status_text += f"Pages: {page_stats['total_pages']} total, "
-            status_text += f"{page_stats['pages_with_embeddings']} with embeddings\n"
-            status_text += f"Chunk Completion: {chunk_completion_stats['complete_chunks']} complete, "
-            status_text += f"{chunk_completion_stats['incomplete_chunks']} incomplete\n"
-            status_text += f"Page Completion: {chunk_completion_stats['pending_embeddings_count']} pending embeddings, "
-            status_text += (
-                f"{chunk_completion_stats['completed_embeddings_count']} complete, "
-            )
-            status_text += (
-                f"{chunk_completion_stats['total_pages_count']} total pages.\n"
-            )
+            status_text = "Data status:\n"
 
             # Get namespace breakdown
             namespace_cursor = sqlconn.execute(
@@ -1003,10 +1043,40 @@ class StatusCommand(Command):
             """
             )
 
-            status_text += "\nNamespace breakdown:\n"
+            status_text += "\nNamespaces:\n"
             for row in namespace_cursor.fetchall():
                 status_text += f"  {row['namespace']}: {row['chunk_count']} chunks, "
-                status_text += f"   {row['downloaded_count']} downloaded\n"
+                status_text += f"{row['downloaded_count']} downloaded\n\n"
+
+            status_text += f"Chunks: {chunk_stats['total_chunks']} total, "
+            status_text += f"{chunk_stats['downloaded_chunks']} downloaded, "
+            status_text += f"{chunk_stats['extracted_chunks']} extracted\n"
+
+            status_text += f"Chunk embedding: {chunk_completion_stats['chunks_completed_embedding']} complete, "
+            status_text += f"{chunk_completion_stats['chunks_pending_embedding']} pending, "
+            status_text += f"{chunk_completion_stats['pending_embeddings_count']} pages pending, "
+            status_text += f"{chunk_completion_stats['completed_embeddings_count']} pages completed\n"
+
+            status_text += f"Chunk reduction: {chunk_completion_stats['chunks_completed_reduction']} complete, "
+            status_text += f"{chunk_completion_stats['chunks_pending_reduction']} pending, "
+            status_text += f"{chunk_completion_stats['pending_reduced_count']} pages pending, "
+            status_text += f"{chunk_completion_stats['completed_reduced_count']} pages completed\n"
+
+            status_text += f"Chunk clustering: {chunk_completion_stats['chunks_completed_clustering']} complete, "
+            status_text += f"{chunk_completion_stats['chunks_pending_clustering']} pending, "
+            status_text += f"{chunk_completion_stats['pending_clustering_count']} pages pending, "
+            status_text += f"{chunk_completion_stats['completed_clustering_count']} pages completed\n"
+
+            status_text += f"Chunk projection: {chunk_completion_stats['chunks_completed_projection']} complete, "
+            status_text += f"{chunk_completion_stats['chunks_pending_projection']} pending, "
+            status_text += f"{chunk_completion_stats['pending_projection_count']} pages pending, "
+            status_text += f"{chunk_completion_stats['completed_projection_count']} pages completed\n\n"
+
+            status_text += f"Pages: {page_stats['total_pages']} total, "
+            status_text += f"{page_stats['embeddings']} embeddings, "
+            status_text += f"{page_stats['reduced_vectors']} embeddings, "
+            status_text += f"{page_stats['clustered']} clustered pages, "
+            status_text += f"{page_stats['clustered']} projected vectors\n"
 
             return status_text
 
