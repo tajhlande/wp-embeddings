@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import json
 import logging
 import os
 import readline
@@ -103,6 +104,7 @@ class Command(ABC):
 
     def validate(self, args: Dict[str, Any]) -> bool:
         """Validate command arguments."""
+        logger.info("Arguments: %s", json.dumps(args, indent=2))
         # Check required arguments
         for arg in self.expected_args:
             if arg.required and (arg not in args or args[arg.name] is None):
