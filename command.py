@@ -52,6 +52,37 @@ atexit.register(readline.write_history_file, _HISTFILE)
 readline.set_history_length(1000)  # keep last 1000 lines
 
 
+class Argument():
+    """Description of a command line argument"""
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        type: str,
+        required: bool,
+        default: Any = None
+    ):
+        self.name = name
+        self.description = description
+        self.type = type
+        self.required = required
+        self.default = default
+
+
+REQUIRED_NAMESPACE_ARGUMENT = Argument(name="namespace", type="string", required=True,
+                                       description="The wiki namespace, e.g. enwiki_namespace_0")
+OPTIONAL_NAMESPACE_ARGUMENT = Argument(name="namespace", type="string", required=False,
+                                       description="The wiki namespace, e.g. enwiki_namespace_0")
+OPTIONAL_CHUNK_LIMIT_ARGUMENT = Argument(name="limit", type="integer", required=False, default=1,
+                                         description="Number of chunks to process")
+OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT = Argument(name="limit", type="integer", required=False,
+                                                    description="Number of chunks to process")
+OPTIONAL_CHUNK_NAME_ARGUMENT = Argument(name="chunk", type="string", required=False,
+                                        description="The name of the chunk to process")
+OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT = Argument(name="limit", type="integer", required=False,
+                                                   description="Number of pages to process")
+
+
 class Command(ABC):
     """Abstract base class for all commands."""
 
@@ -59,13 +90,11 @@ class Command(ABC):
         self,
         name: str,
         description: str,
-        required_args: List[str] = [],
-        optional_args: Dict[str, Any] = {},
+        expected_args: List[Argument] = []
     ):
         self.name = name
         self.description = description
-        self.required_args = required_args
-        self.optional_args = optional_args
+        self.expected_args = expected_args
 
     @abstractmethod
     def execute(self, args: Dict[str, Any]) -> str:
@@ -75,25 +104,40 @@ class Command(ABC):
     def validate(self, args: Dict[str, Any]) -> bool:
         """Validate command arguments."""
         # Check required arguments
-        for arg in self.required_args:
-            if arg not in args or args[arg] is None:
-                raise ValueError(f"Missing required argument: {arg}")
+        for arg in self.expected_args:
+            if arg.required and (arg not in args or args[arg.name] is None):
+                raise ValueError(f"Missing required argument: {arg.name}")
 
         # Check argument types and values
-        for arg, default_value in self.optional_args.items():
-            if arg in args and args[arg] is not None:
+        for expected_arg in self.expected_args:
+            if expected_arg.name in args and args[expected_arg.name] is not None:
+                supplied_arg = args[expected_arg.name]
                 # Add specific validation rules here
-                pass
-
+                if expected_arg.type == "integer":
+                    try:
+                        val = int(supplied_arg)
+                    except ValueError:
+                        raise ValueError(f"Argument {expected_arg.name} must be an integer")
+                    if val < 1:
+                        raise ValueError(f"Argument {expected_arg.name} must be >= 1")
+            elif expected_arg.name not in args and expected_arg.default is not None:
+                args[expected_arg.name] = expected_arg.default
         return True
+
+    def format_argument_info(self, arg: Argument):
+        return f"  --{arg.name} ({arg.type}{f', default: {arg.default}' if arg.default else ''}) {arg.description}\n"
 
     def get_help(self) -> str:
         """Get help text for the command."""
-        help_text = f"{self.name}: {self.description}\n"
-        help_text += f"Required arguments: {', '.join(self.required_args) if self.required_args else 'None'}\n"
-        help_text += "Optional arguments:\n"
-        for arg, default in self.optional_args.items():
-            help_text += f"  --{arg} ({type(default).__name__}): Default: {default}\n"
+        help_text = f"Command \"{self.name}\": {self.description}\n"
+        required_arguments = [arg for arg in self.expected_args if arg.required]
+        optional_arguments = [arg for arg in self.expected_args if not arg.required]
+        help_text += f"\nRequired arguments: {'' if required_arguments else 'None'}\n"
+        for arg in required_arguments:
+            help_text += self.format_argument_info(arg)
+        help_text += f"\nOptional arguments: {'' if optional_arguments else 'None'}\n"
+        for arg in optional_arguments:
+            help_text += self.format_argument_info(arg)
         return help_text
 
 
@@ -231,12 +275,11 @@ class RefreshChunkDataCommand(Command):
         super().__init__(
             name="refresh",
             description="Refresh chunk data for a namespace",
-            required_args=["namespace"],
-            optional_args={},
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
-        namespace = args["namespace"]
+        namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
         logger.info("Refreshing chunk data for namespace: %s", namespace)
 
         try:
@@ -278,22 +321,12 @@ class DownloadChunksCommand(Command):
         super().__init__(
             name="download",
             description="Download chunks that haven't been downloaded yet",
-            required_args=[],
-            optional_args={"limit": 1, "namespace": None},
+            expected_args=[OPTIONAL_CHUNK_LIMIT_ARGUMENT, OPTIONAL_NAMESPACE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
-        limit_arg = args.get("limit", 1)
-        namespace = args.get("namespace")
-
-        limit = None
-        if limit_arg is not None:
-            try:
-                limit = int(limit_arg)
-                if limit <= 0:
-                    return "✗ Limit must be a positive integer"
-            except ValueError:
-                return "✗ Invalid limit value. Please provide a positive integer."
+        limit = args.get(OPTIONAL_CHUNK_LIMIT_ARGUMENT.name, OPTIONAL_CHUNK_LIMIT_ARGUMENT.default)
+        namespace = args.get(OPTIONAL_NAMESPACE_ARGUMENT.name)
 
         try:
             sqlconn = get_sql_conn()
@@ -408,23 +441,12 @@ class UnpackProcessChunksCommand(Command):
         super().__init__(
             name="unpack",
             description="Unpack and process downloaded chunks",
-            required_args=[],
-            optional_args={"namespace": None, "limit": None},
+            expected_args=[OPTIONAL_NAMESPACE_ARGUMENT, OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
-        namespace = args.get("namespace")
-        limit = args.get("limit")
-
-        # Validate and convert limit parameter
-        limit_int = None
-        if limit is not None:
-            try:
-                limit_int = int(limit)
-                if limit_int <= 0:
-                    return "✗ Limit must be a positive integer"
-            except ValueError:
-                return "✗ Invalid limit value. Please provide a positive integer."
+        namespace = args.get(OPTIONAL_NAMESPACE_ARGUMENT.name)
+        limit = args.get(OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT.name)
 
         try:
             sqlconn = get_sql_conn()
@@ -462,9 +484,9 @@ class UnpackProcessChunksCommand(Command):
             processed_count = 0
             total_pages = 0
 
-            if limit_int:
-                chunks_to_unpack = chunks_to_unpack[:limit_int]
-                logger.info("Limiting unpacking to %d chunks at most", limit_int)
+            if limit:
+                chunks_to_unpack = chunks_to_unpack[:limit]
+                logger.info("Limiting unpacking to %d chunks at most", limit)
 
             logger.info("Planning to unpack to %d chunks", len(chunks_to_unpack))
 
@@ -565,8 +587,7 @@ class EmbedPagesCommand(Command):
         super().__init__(
             name="embed",
             description="Process remaining pages for embedding computation",
-            required_args=[],
-            optional_args={"chunk": None, "limit": None},
+            expected_args=[OPTIONAL_CHUNK_NAME_ARGUMENT, OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT]
         )
         embedding_model_name, embedding_model_api_url, embedding_model_api_key = (
             get_embedding_model_config()
@@ -576,18 +597,8 @@ class EmbedPagesCommand(Command):
         self.embedding_model_api_key = embedding_model_api_key
 
     def execute(self, args: Dict[str, Any]) -> str:
-        chunk_name = args.get("chunk")
-        limit_arg = args.get("limit")
-
-        # Validate and convert limit parameter
-        limit = None
-        if limit_arg is not None:
-            try:
-                limit = int(limit_arg)
-                if limit <= 0:
-                    return "✗ Limit must be a positive integer"
-            except ValueError:
-                return "✗ Invalid limit value. Please provide a positive integer."
+        chunk_name = args.get(OPTIONAL_CHUNK_NAME_ARGUMENT.name)
+        limit = args.get(OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT.name)
 
         logger.info(
             "Computing embeddings for pages%s%s...",
@@ -743,6 +754,12 @@ class EmbedPagesCommand(Command):
             return f"✗ Failed to process pages: {e}"
 
 
+TARGET_DIMENSIONS_ARGUMENT = Argument(name="target-dim", type="integer", required=False, default=100,
+                                      description="The target number of dimensions to reduce to")
+BATCH_SIZE_ARGUMENT = Argument(name="batch-size", type="integer", required=False, default=10_000,
+                               description="Number of pages to reduce per batch")
+
+
 class ReduceCommand(Command):
     """Transform embedding vectors to a smaller vector space."""
 
@@ -750,19 +767,18 @@ class ReduceCommand(Command):
         super().__init__(
             name="reduce",
             description="Reduce dimension of embeddings",
-            required_args=["namespace"],
-            optional_args={"target-dim": 100, "batch-size": 10_000},
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT, TARGET_DIMENSIONS_ARGUMENT, BATCH_SIZE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
         try:
-            namespace = args["namespace"]
+            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
             sqlconn = get_sql_conn()
             ensure_tables(sqlconn)
 
-            target_dim = args.get("target-dim", 100)
-            batch_size = args.get("batch-size", 10_000)
+            target_dim = args.get(TARGET_DIMENSIONS_ARGUMENT.name, TARGET_DIMENSIONS_ARGUMENT.default)
+            batch_size = args.get(BATCH_SIZE_ARGUMENT.name, BATCH_SIZE_ARGUMENT.default)
             print(f"Target dimension: {target_dim}, batch size: {batch_size}")
 
             if target_dim > batch_size:
@@ -805,6 +821,10 @@ class ReduceCommand(Command):
             return f"✗ Failed to reduce embeddings: {e}"
 
 
+CLUSTER_COUNT_ARGUMENT = Argument(name="clusters", type="integer", required=False, default=10_000,
+                                  description="Number of clusters to process")
+
+
 class ClusterCommand(Command):
     """Cluster reduced vectors with k-means."""
 
@@ -812,19 +832,18 @@ class ClusterCommand(Command):
         super().__init__(
             name="cluster",
             description="Cluster reduced vectors with k-means",
-            required_args=["namespace"],
-            optional_args={"clusters": 100, "batch-size": 10_000},
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT, CLUSTER_COUNT_ARGUMENT, BATCH_SIZE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
         try:
-            namespace = args["namespace"]
+            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
             sqlconn = get_sql_conn()
             ensure_tables(sqlconn)
 
-            num_clusters = int(args.get("clusters", 100))
-            batch_size = int(args.get("batch-size", 10_000))
+            num_clusters = args.get(CLUSTER_COUNT_ARGUMENT.name, CLUSTER_COUNT_ARGUMENT.default)
+            batch_size = args.get(BATCH_SIZE_ARGUMENT.name, BATCH_SIZE_ARGUMENT.default)
 
             estimated_vector_count = get_reduced_vector_count(namespace, sqlconn)
             estimated_batch_count = estimated_vector_count // batch_size + 1
@@ -856,6 +875,10 @@ class ClusterCommand(Command):
             return f"✗ Failed to cluster embeddings: {e}"
 
 
+OPTIONAL_CLUSTER_LIMIT_ARGUMENT = Argument(name="limit", type="integer", required=False,
+                                           description="Number of clusters to process")
+
+
 class ProjectCommand(Command):
     """Project reduced vector clusters into 3-space."""
 
@@ -863,24 +886,13 @@ class ProjectCommand(Command):
         super().__init__(
             name="project",
             description="Project reduced vector clusters into 3-space.",
-            required_args=["namespace"],
-            optional_args={"limit": None},
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT, OPTIONAL_CLUSTER_LIMIT_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
         try:
-            namespace = args["namespace"]
-            limit_arg = args.get("limit")
-
-            # Validate and convert limit parameter
-            limit = None
-            if limit_arg is not None:
-                try:
-                    limit = int(limit_arg)
-                    if limit <= 0:
-                        return "✗ Limit must be a positive integer"
-                except ValueError:
-                    return "✗ Invalid limit value. Please provide a positive integer."
+            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
+            limit = args.get(OPTIONAL_CLUSTER_LIMIT_ARGUMENT.name)
 
             sqlconn = get_sql_conn()
             ensure_tables(sqlconn)
@@ -902,8 +914,7 @@ class StatusCommand(Command):
         super().__init__(
             name="status",
             description="Show current data status",
-            required_args=[],
-            optional_args={},
+            expected_args=[]
         )
 
     def execute(self, args: Dict[str, Any]) -> str:
@@ -1085,6 +1096,10 @@ class StatusCommand(Command):
             return f"✗ Failed to get status: {e}"
 
 
+COMMAND_NAME_ARGUMENT = Argument(name="command", type="string", required=False,
+                                 description="Get help on the specific named command")
+
+
 class HelpCommand(Command):
     """Show help information."""
 
@@ -1092,13 +1107,12 @@ class HelpCommand(Command):
         super().__init__(
             name="help",
             description="Show help information",
-            required_args=[],
-            optional_args={"command": None},
+            expected_args=[COMMAND_NAME_ARGUMENT]
         )
         self.parser = parser
 
     def execute(self, args: Dict[str, Any]) -> str:
-        command_name = args.get("command")
+        command_name = args.get(COMMAND_NAME_ARGUMENT.name)
 
         if command_name:
             return self.parser.get_command_help(command_name)
