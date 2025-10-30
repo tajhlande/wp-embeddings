@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 from typing import Optional
 
 
@@ -20,6 +21,9 @@ class Page:
     url: str
     extracted_at: Optional[str] = None
     abstract: Optional[str] = None
+
+    def to_json(self, pretty_print: bool = False):
+        return json.dumps(self.__dict__, indent=2) if pretty_print else json.dumps(self.__dict__)
 
 
 @dataclass

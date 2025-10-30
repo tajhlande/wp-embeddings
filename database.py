@@ -190,6 +190,9 @@ def three_d_vector_to_text(vector: Optional[NDArray]) -> Optional[str]:
 
 
 def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
+    if page.page_id is None:
+        raise ValueError(f"Tried to upsert page with no page ID. Page contents: {page.to_json}")
+
     page_data_upsert_sql = """
         INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract)
         VALUES(:page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)

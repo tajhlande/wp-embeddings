@@ -222,8 +222,13 @@ def parse_chunk_file(
                 line_number += 1
                 # Assuming each line is a JSON object representing a page
                 raw_page_data = json.loads(line)
+                page_id = raw_page_data.get("identifier")
+                if page_id is None:
+                    page_id = raw_page_data.get("id")
+                if page_id is None:
+                    raise ValueError(f"Can't get page id from raw page: {line[:100]}...")
                 page = Page(
-                    page_id=raw_page_data.get("id"),
+                    page_id=page_id,
                     title=raw_page_data.get("name"),
                     chunk_name=chunk_name,
                     url=raw_page_data.get("url"),
