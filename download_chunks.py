@@ -15,7 +15,7 @@ from database import (
     ensure_tables,
     get_sql_conn,
     upsert_new_chunk_data,
-    upsert_new_page_data,
+    upsert_new_pages_in_batch,
 )
 from wme_sdk.auth.auth_client import AuthClient
 from wme_sdk.api.api_client import Client, Request, Filter
@@ -216,6 +216,9 @@ def parse_chunk_file(
         # logger.info(f"Found {total_lines} lines to process")
 
         # Parse with progress bar - reduce logging frequency to avoid interference
+
+        BUFFER_SIZE = 1000
+        buffer = []
         with open(chunk_file_path, "r", encoding="utf-8") as f:
             line_number = 0
             for line in f:
@@ -234,14 +237,42 @@ def parse_chunk_file(
                     url=raw_page_data.get("url"),
                     abstract=raw_page_data.get("abstract"),
                 )
+                buffer.append(page)
+                if len(buffer) >= BUFFER_SIZE:
+                    upsert_new_pages_in_batch(buffer, sqlconn, BUFFER_SIZE)
+                    tracker.update(len(buffer)) if tracker else None
+                    buffer = []
+        # flush remainder
+        if buffer:
+            upsert_new_pages_in_batch(buffer, sqlconn, BUFFER_SIZE)
+            tracker.update(len(buffer)) if tracker else None
 
-                # Log progress if no tracker
-                if not tracker and line_number % 10000 == 0:
-                    logger.info(f"Processed {line_number} lines so far...")
+        # with open(chunk_file_path, "r", encoding="utf-8") as f:
+        #     line_number = 0
+        #     for line in f:
+        #         line_number += 1
+        #         # Assuming each line is a JSON object representing a page
+        #         raw_page_data = json.loads(line)
+        #         page_id = raw_page_data.get("identifier")
+        #         if page_id is None:
+        #             page_id = raw_page_data.get("id")
+        #         if page_id is None:
+        #             raise ValueError(f"Can't get page id from raw page: {line[:100]}...")
+        #         page = Page(
+        #             page_id=page_id,
+        #             title=raw_page_data.get("name"),
+        #             chunk_name=chunk_name,
+        #             url=raw_page_data.get("url"),
+        #             abstract=raw_page_data.get("abstract"),
+        #         )
 
-                # Upsert page data into the database
-                upsert_new_page_data(page, sqlconn)
-                tracker.update(1) if tracker else None
+        #         # Log progress if no tracker
+        #         if not tracker and line_number % 10000 == 0:
+        #             logger.info(f"Processed {line_number} lines so far...")
+
+        #         # Upsert page data into the database
+        #         upsert_new_page_data(page, sqlconn)
+        #         tracker.update(1) if tracker else None
 
         # logger.info(f"Completed parsing {chunk_name}: {line_number} lines processed")
         return line_number

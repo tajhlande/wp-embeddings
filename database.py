@@ -80,11 +80,25 @@ _sqlconns = {}
 
 
 def get_sql_conn(db_file: str = "chunk_log.db") -> sqlite3.Connection:
+    # if we already created a connection, just return that
     if _sqlconns.get(db_file):
         return _sqlconns[db_file]
+
+    # otherwise, make a new connection
     logger.info("Establishing SQLite connection")
     sqlconn = sqlite3.connect(db_file)
     sqlconn.row_factory = sqlite3.Row  # This enables dict-like access to rows
+
+    # Performance pragmas
+    try:
+        sqlconn.execute("PRAGMA journal_mode=WAL;")
+        sqlconn.execute("PRAGMA synchronous=NORMAL;")
+        sqlconn.execute("PRAGMA temp_store = MEMORY;")
+        sqlconn.execute("PRAGMA cache_size = -20000;")  # ~20MB cache (adjust as needed)
+    except sqlite3.Error:
+        pass
+
+    # cache the connection for reuse later
     _sqlconns[db_file] = sqlconn
     return sqlconn
 
@@ -216,6 +230,29 @@ def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
                 f"Failed to roll back sql transaction while handling another error: {ex}"
             )
         logger.error(f"Failed to upsert page data for page {page.page_id}: {e}")
+        raise
+
+
+def upsert_new_pages_in_batch(pages: list[Page], sqlconn: sqlite3.Connection, batch_size: int = 1000):
+    sql = """
+      INSERT INTO page_log(page_id, title, chunk_name, url, extracted_at, abstract)
+      VALUES(:page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)
+      ON CONFLICT(page_id) DO UPDATE SET
+        title = :title,
+        chunk_name = :chunk_name,
+        url = :url,
+        extracted_at = CURRENT_TIMESTAMP,
+        abstract = :abstract
+    """
+    cursor = sqlconn.cursor()
+    try:
+        for i in range(0, len(pages), batch_size):
+            batch = pages[i: i + batch_size]
+            params = [asdict(p) for p in batch]
+            cursor.executemany(sql, params)
+            sqlconn.commit()
+    except sqlite3.Error:
+        sqlconn.rollback()
         raise
 
 
