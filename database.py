@@ -23,7 +23,7 @@ def ensure_tables(sqlconn: sqlite3.Connection):
             chunk_archive_path TEXT,
             chunk_extracted_path TEXT,
             downloaded_at DATETIME,
-            completed_at DATETIME
+            unpacked_at DATETIME
         );
         """
     page_log_table_sql = """
@@ -221,10 +221,10 @@ def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
 
 def upsert_new_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
     upsert_sql = """
-        INSERT INTO chunk_log(chunk_name, namespace, downloaded_at, completed_at)
+        INSERT INTO chunk_log(chunk_name, namespace, downloaded_at, unpacked_at)
           VALUES(:chunk_name, :namespace, NULL, NULL)
           ON CONFLICT(chunk_name) DO UPDATE
-          SET chunk_name = :chunk_name, downloaded_at = NULL, completed_at = NULL;
+          SET chunk_name = :chunk_name, downloaded_at = NULL, unpacked_at = NULL;
         """
     try:
         cursor = sqlconn.cursor()
@@ -249,7 +249,7 @@ def update_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
         SET chunk_archive_path = :chunk_archive_path,
             chunk_extracted_path = :chunk_extracted_path,
             downloaded_at = :downloaded_at,
-            completed_at = :completed_at
+            unpacked_at = :unpacked_at
         WHERE chunk_name = :chunk_name
         """
     try:

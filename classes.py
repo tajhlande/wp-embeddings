@@ -10,7 +10,7 @@ class Chunk:
     chunk_archive_path: Optional[str] = None
     chunk_extracted_path: Optional[str] = None
     downloaded_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    unpacked_at: Optional[str] = None
 
 
 @dataclass

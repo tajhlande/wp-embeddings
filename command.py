@@ -539,7 +539,7 @@ class UnpackProcessChunksCommand(Command):
 
                         # Update database
                         sqlconn.execute(
-                            "UPDATE chunk_log SET chunk_extracted_path = ? WHERE chunk_name = ?",
+                            "UPDATE chunk_log SET chunk_extracted_path = ?, unpacked_at = CURRENT_TIMESTAMP WHERE chunk_name = ?",
                             (chunk_file_path, chunk_name),
                         )
                         sqlconn.commit()
