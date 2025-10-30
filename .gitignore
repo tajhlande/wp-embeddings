@@ -17,6 +17,8 @@ downloaded
 extracted
 chunk_log.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.json
 *.ndjson
 enwiki_namespace_0_chunk_0_line_1.txt
