@@ -97,6 +97,12 @@ class Command(ABC):
         self.description = description
         self.expected_args = expected_args
 
+    def get_required_args(self):
+        return [arg for arg in self.expected_args if arg.required is True]
+
+    def get_optional_args(self):
+        return [arg for arg in self.expected_args if arg.required is False]
+
     @abstractmethod
     def execute(self, args: Dict[str, Any]) -> str:
         """Execute the command with given arguments."""
@@ -147,7 +153,7 @@ class CommandParser:
     """Parse user input into command and arguments."""
 
     def __init__(self):
-        self.commands = {}
+        self.commands: dict[str, Command] = {}
 
     def register_command(self, command: Command):
         """Register a command."""
@@ -266,7 +272,7 @@ class CommandDispatcher:
         except ValueError as e:
             return f"Validation error: {e}"
         except Exception as e:
-            logger.error(f"Error executing command '{command_name}': {e}")
+            logger.exception(f"Error executing command '{command_name}': {e}")
             return f"Error: {e}"
 
 
@@ -601,7 +607,7 @@ class EmbedPagesCommand(Command):
 
     def execute(self, args: Dict[str, Any]) -> str:
         chunk_name = args.get(OPTIONAL_CHUNK_NAME_ARGUMENT.name)
-        limit = args.get(OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT.name)
+        limit = args.get(OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT.name, OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT.default)
 
         logger.info(
             "Computing embeddings for pages%s%s...",
@@ -1216,14 +1222,14 @@ class CommandInterpreter:
         # Add command-specific arguments
         command = self.parser.commands.get(command_name)
         if command:
-            for arg in command.required_args:
+            for arg in command.get_required_args():
                 parser.add_argument(
-                    f"--{arg}", required=True, help=f"Required argument: {arg}"
+                    f"--{arg.name}", required=True, help=f"Required argument: {arg.name}"
                 )
 
-            for arg, default in command.optional_args.items():
+            for arg in command.get_optional_args():
                 parser.add_argument(
-                    f"--{arg}", default=default, help=f"Optional argument: {arg}"
+                    f"--{arg.name}", default=arg.default, help=f"Optional argument: {arg.name}"
                 )
 
         try:
