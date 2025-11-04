@@ -1094,7 +1094,7 @@ class StatusCommand(Command):
 
             status_text += f"Pages: {page_stats['total_pages']} total, "
             status_text += f"{page_stats['embeddings']} embeddings, "
-            status_text += f"{page_stats['reduced_vectors']} embeddings, "
+            status_text += f"{page_stats['reduced_vectors']} reduced vectors, "
             status_text += f"{page_stats['clustered']} clustered pages, "
             status_text += f"{page_stats['clustered']} projected vectors\n"
 
