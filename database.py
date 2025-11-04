@@ -614,15 +614,15 @@ def get_clusters_needing_projection(sqlconn: sqlite3.Connection,
                                     limit: Optional[int],
                                     ) -> list[tuple[int, int]]:
     select_sql = f"""
-        SELECT cluster_info.cluster_id, COUNT()
-        FROM cluster_info
-        INNER JOIN chunk_log ON cluster_info.namespace = chunk_log.namespace
-        INNER JOIN page_log ON chunk_log.chunk_name = page_log.chunk_name
-        INNER JOIN page_vector ON page_log.page_id = page_vector.page_id
+        SELECT page_vector.cluster_id, COUNT(page_vector.page_id)
+        FROM page_vector
+        INNER JOIN page_log ON page_vector.page_id = page_log.page_id
+        INNER JOIN chunk_log ON page_log.chunk_name = chunk_log.chunk_name
         WHERE page_vector.three_d_vector IS NULL
+        AND page_vector.cluster_id IS NOT NULL
         AND chunk_log.namespace = :namespace
-        GROUP BY cluster_info.cluster_id
-        ORDER BY cluster_info.cluster_id ASC
+        GROUP BY page_vector.cluster_id
+        ORDER BY page_vector.cluster_id ASC
         {f'LIMIT {limit}' if limit else ''}
         """
     cursor = sqlconn.execute(select_sql, {'namespace': namespace})
@@ -637,11 +637,10 @@ def get_reduced_vectors_for_cluster(sqlconn: sqlite3.Connection, namespace: str,
         FROM page_vector
         INNER JOIN page_log ON page_vector.page_id = page_log.page_id
         INNER JOIN chunk_log ON page_log.chunk_name = chunk_log.chunk_name
-        WHERE page_vector.cluster_id = 1
-        AND chunk_log.namespace = 'enwiki_namespace_0'
+        WHERE page_vector.cluster_id = :cluster_id
+        AND chunk_log.namespace = :namespace
         ORDER BY page_vector.page_id ASC
         """
-    " :cluster_id :namespace"
     cursor = sqlconn.execute(select_sql, {'namespace': namespace, 'cluster_id': cluster_id})
     rows = cursor.fetchall()
     return rows
