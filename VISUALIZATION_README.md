@@ -50,16 +50,48 @@ python visualize_embeddings.py --cluster 5 --2d --limit 200
 
 # Start interactive mode
 python visualize_embeddings.py --interactive
+
+# Cluster Tree Visualizations
+# ---------------------------
+# Create traditional dendrogram (recommended for clarity)
+python visualize_embeddings.py --traditional-dendrogram --max-nodes 50
+
+# Create hierarchical visualization with multiple layouts
+python visualize_embeddings.py --hierarchical --max-nodes 30
+
+# Create radial dendrogram (improved version)
+python visualize_embeddings.py --radial-dendrogram --max-nodes 100
+
+# List cluster tree information
+python visualize_embeddings.py --list-tree
+
+# Analyze cluster tree data quality and issues
+python visualize_embeddings.py --analyze-tree
+
+# Validate cluster tree integrity
+python visualize_embeddings.py --validate-tree
+
+# Advanced options for tree visualizations
+python visualize_embeddings.py --traditional-dendrogram --namespace enwiki_namespace_0 --max-depth 5 --max-nodes 25 --save-path dendrogram.png
 ```
 
 ## Database Schema
 
 The visualization tools query the following tables:
 
+### Embedding Tables
 - `page_vector`: Contains the 3D embeddings (`three_d_vector` column)
 - `page_log`: Contains page titles and URLs
-- `cluster_info`: Contains cluster metadata
 - `chunk_log`: Contains namespace information
+
+### Cluster Tree Tables
+- `cluster_tree`: Contains hierarchical cluster structure with parent-child relationships
+  - `node_id`: Unique identifier for each cluster node
+  - `parent_id`: Reference to parent node (NULL for root nodes)
+  - `depth`: Depth level in the hierarchy
+  - `doc_count`: Number of documents in this cluster
+  - `child_count`: Number of direct children
+  - `first_label`/`final_label`: Labels for the cluster
 
 ## Common Issues and Solutions
 
@@ -96,16 +128,34 @@ For clusters with many pages (>500), consider using the `--limit` parameter to v
 - **Projected**: Number of articles with 3D vectors computed
 - **Complete**: Shows projection progress (✓ when 100% complete)
 
+### Cluster Tree Visualizations
+- **Traditional Dendrogram**: Clear hierarchical view using scipy's dendrogram function
+- **Hierarchical Visualization**: Four different layout approaches:
+  - Traditional top-down dendrogram
+  - Level-by-level visualization
+  - Rectangular tree layout (better for large trees)
+  - Improved radial layout (only for small trees ≤25 nodes)
+- **Radial Dendrogram**: Circular layout showing hierarchical relationships
+
 ## Tips for Exploration
 
+### For Cluster Analysis
 1. **Start with small clusters**: Begin with clusters that have fewer pages to get a feel for the data
 2. **Look for patterns**: Notice how articles about similar topics group together
 3. **Compare clusters**: Different clusters may represent different topics or themes
 4. **Use both 2D and 3D**: 2D is faster, 3D shows more detail
 5. **Adjust limits**: Use the `--limit` parameter to control how many pages are displayed
 
+### For Cluster Tree Analysis
+1. **Use traditional dendrogram for clarity**: The traditional dendrogram provides the clearest view of hierarchical relationships
+2. **Start with hierarchical visualization**: Shows multiple layout approaches to understand your data structure
+3. **Validate data quality**: Use `--analyze-tree` and `--validate-tree` to check for data issues
+4. **Limit node count**: Use `--max-nodes` to control visualization complexity (25-100 nodes works well)
+5. **Filter by depth**: Use `--max-depth` to focus on specific hierarchy levels
+
 ## Example Workflow
 
+### Standard Cluster Analysis
 ```bash
 # 1. Check current status
 python visualize_embeddings.py --list-clusters
@@ -123,10 +173,49 @@ python -m command project --namespace enwiki_namespace_0 --limit 5
 python visualize_embeddings.py --interactive
 ```
 
+### Cluster Tree Analysis
+```bash
+# 1. Check if cluster tree exists
+python visualize_embeddings.py --list-tree
+
+# 2. Analyze data quality and potential issues
+python visualize_embeddings.py --analyze-tree
+
+# 3. Validate tree structure integrity
+python visualize_embeddings.py --validate-tree
+
+# 4. Create traditional dendrogram (recommended for clarity)
+python visualize_embeddings.py --traditional-dendrogram --max-nodes 50
+
+# 5. Try hierarchical visualization for multiple perspectives
+python visualize_embeddings.py --hierarchical --max-nodes 30
+
+# 6. For small trees, try radial layout
+python visualize_embeddings.py --radial-dendrogram --max-nodes 25
+```
+
+### Advanced Analysis Workflow
+```bash
+# 1. Comprehensive tree analysis
+python visualize_embeddings.py --analyze-tree --namespace enwiki_namespace_0
+
+# 2. Validate integrity and check for issues
+python visualize_embeddings.py --validate-tree --namespace enwiki_namespace_0
+
+# 3. Create traditional dendrogram with depth filtering
+python visualize_embeddings.py --traditional-dendrogram --max-depth 5 --max-nodes 100
+
+# 4. Save visualization for documentation
+python visualize_embeddings.py --hierarchical --max-nodes 40 --save-path cluster_analysis.png
+
+# 5. Interactive exploration
+python visualize_embeddings.py --interactive
+#   Then use commands: 'tree', 'analyze', 'validate', 'traditional', 'hierarchical'
+```
+
 ## Dependencies
 
-The visualization tools require the following Python packages:
-
+### Core Dependencies
 - `pandas` for data manipulation
 - `numpy` for numerical operations
 - `matplotlib` for 2D/3D plotting (script version)
@@ -134,7 +223,14 @@ The visualization tools require the following Python packages:
 - `scikit-learn` for PCA analysis
 - `sqlite3` (built-in Python module)
 
-These should already be installed as part of the wp-embeddings project dependencies.
+### Additional Dependencies for Tree Visualizations
+- `scipy` for hierarchical clustering and dendrogram functions
+  - Required for: `--traditional-dendrogram`, `--hierarchical`, `--analyze-tree`, `--validate-tree`
+
+These should already be installed as part of the wp-embeddings project dependencies. If scipy is missing, install it with:
+```bash
+pip install scipy
+```
 
 ## Troubleshooting
 
@@ -144,7 +240,7 @@ Make sure you're in the correct directory and the `chunk_log.db` file exists.
 ### Missing Dependencies
 Install missing packages with:
 ```bash
-pip install pandas numpy matplotlib plotly scikit-learn
+pip install pandas numpy matplotlib plotly scikit-learn scipy
 ```
 
 ### Empty Results
@@ -153,6 +249,46 @@ If no clusters are found, you may need to run the clustering step first:
 python -m command cluster --namespace enwiki_namespace_0 --clusters 100
 ```
 
+### Cluster Tree Issues
+If cluster tree commands fail with "No cluster tree nodes found":
+1. Check if the `cluster_tree` table exists in your database
+2. You may need to generate cluster tree data first (check project documentation)
+3. Try a different namespace if you're using a custom one
+
+### Visualization Problems
+- **"Too many nodes" warning**: Use `--max-nodes` to limit the number of displayed nodes
+- **Poor dendrogram layout**: Try `--traditional-dendrogram` instead of radial for better clarity
+- **Overlapping labels**: Reduce `--max-nodes` or use `--max-depth` to filter the hierarchy
+- **Missing data**: Run `--analyze-tree` to check for data quality issues
+
+### Performance Issues
+- For large datasets (>1000 nodes), use `--max-nodes 50` or less
+- Use `--max-depth` to focus on specific hierarchy levels
+- Consider using 2D visualizations (`--2d`) instead of 3D for better performance
+
 ## Contributing
 
 If you have suggestions for improvements or find bugs, please open an issue or submit a pull request.
+
+## New Features in Recent Updates
+
+### Enhanced Dendrogram Visualizations
+- **Traditional Dendrogram**: Added a clear, hierarchical dendrogram using scipy's built-in functions
+- **Hierarchical Visualization**: Four different layout approaches for better data understanding
+- **Improved Radial Layout**: Better spacing and algorithms for small trees
+
+### Data Quality and Validation Tools
+- **Tree Quality Analysis** (`--analyze-tree`): Detects cycles, connectivity issues, depth inconsistencies, and data quality problems
+- **Integrity Validation** (`--validate-tree`): Validates parent references, depth consistency, and tree structure
+- **Enhanced Error Handling**: Better detection and reporting of data issues
+
+### Interactive Mode Enhancements
+- New commands: `traditional`, `analyze`, `validate`
+- Better help system with examples
+- Improved error handling and user feedback
+
+### Performance Optimizations
+- Node limiting with `--max-nodes` parameter
+- Depth filtering with `--max-depth` parameter
+- Better memory management for large datasets
+- Improved layout algorithms for clearer visualizations
