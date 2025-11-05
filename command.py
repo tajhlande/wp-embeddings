@@ -31,7 +31,7 @@ from index_pages import (
     get_embedding_model_config,
 )
 from progress_utils import ProgressTracker
-from transform import run_kmeans, run_pca, run_umap_per_cluster
+from transform import run_kmeans, run_pca, run_umap_per_cluster, run_recursive_clustering
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -126,8 +126,19 @@ class Command(ABC):
                         val = int(supplied_arg)
                     except ValueError:
                         raise ValueError(f"Argument {expected_arg.name} must be an integer")
-                    if val < 1:
-                        raise ValueError(f"Argument {expected_arg.name} must be >= 1")
+                    # Only apply >= 1 validation for arguments that should be positive integers
+                    if expected_arg.name in ["clusters", "batch-size", "leaf-target", "max-k", "max-depth"]:
+                        if val < 1:
+                            raise ValueError(f"Argument {expected_arg.name} must be >= 1")
+                elif expected_arg.type == "float":
+                    try:
+                        val = float(supplied_arg)
+                    except ValueError:
+                        raise ValueError(f"Argument {expected_arg.name} must be a float")
+                    # Only apply >= 0 validation for arguments that should be non-negative
+                    if expected_arg.name == "min-silhouette":
+                        if val < 0:
+                            raise ValueError(f"Argument {expected_arg.name} must be >= 0")
             elif expected_arg.name not in args and expected_arg.default is not None:
                 args[expected_arg.name] = expected_arg.default
         return True
@@ -830,6 +841,14 @@ class ReduceCommand(Command):
             return f"✗ Failed to reduce embeddings: {e}"
 
 
+LEAF_TARGET_ARGUMENT = Argument(name="leaf-target", type="integer", required=False, default=50,
+                                description="Target number of documents per leaf cluster")
+MAX_K_ARGUMENT = Argument(name="max-k", type="integer", required=False, default=50,
+                         description="Maximum number of clusters to create at each level")
+MAX_DEPTH_ARGUMENT = Argument(name="max-depth", type="integer", required=False, default=10,
+                             description="Maximum depth for recursion")
+MIN_SILHOUETTE_ARGUMENT = Argument(name="min-silhouette", type="float", required=False, default=0.1,
+                                   description="Minimum silhouette score to continue clustering")
 CLUSTER_COUNT_ARGUMENT = Argument(name="clusters", type="integer", required=False, default=10_000,
                                   description="Number of clusters to process")
 
@@ -886,6 +905,56 @@ class ClusterCommand(Command):
 
 OPTIONAL_CLUSTER_LIMIT_ARGUMENT = Argument(name="limit", type="integer", required=False,
                                            description="Number of clusters to process")
+
+
+class RecursiveClusterCommand(Command):
+    """Run recursive clustering algorithm to build a tree of clusters."""
+
+    def __init__(self):
+        super().__init__(
+            name="recursive-cluster",
+            description="Run recursive clustering algorithm to build a tree of clusters",
+            expected_args=[
+                REQUIRED_NAMESPACE_ARGUMENT,
+                LEAF_TARGET_ARGUMENT,
+                MAX_K_ARGUMENT,
+                MAX_DEPTH_ARGUMENT,
+                MIN_SILHOUETTE_ARGUMENT,
+                BATCH_SIZE_ARGUMENT
+            ]
+        )
+
+    def execute(self, args: Dict[str, Any]) -> str:
+        try:
+            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
+            leaf_target = args.get(LEAF_TARGET_ARGUMENT.name, LEAF_TARGET_ARGUMENT.default)
+            max_k = args.get(MAX_K_ARGUMENT.name, MAX_K_ARGUMENT.default)
+            max_depth = args.get(MAX_DEPTH_ARGUMENT.name, MAX_DEPTH_ARGUMENT.default)
+            min_silhouette = args.get(MIN_SILHOUETTE_ARGUMENT.name, MIN_SILHOUETTE_ARGUMENT.default)
+            batch_size = args.get(BATCH_SIZE_ARGUMENT.name, BATCH_SIZE_ARGUMENT.default)
+
+            sqlconn = get_sql_conn()
+            ensure_tables(sqlconn)
+
+            print(f"Running recursive clustering on namespace {namespace}")
+            print(f"Parameters: leaf-target={leaf_target}, max-k={max_k}, max-depth={max_depth}, min-silhouette={min_silhouette}, batch-size={batch_size}")
+
+            with ProgressTracker(description="Recursive clustering", unit=" nodes") as tracker:
+                nodes_processed = run_recursive_clustering(
+                    sqlconn,
+                    namespace=namespace,
+                    leaf_target=leaf_target,
+                    max_k=max_k,
+                    max_depth=max_depth,
+                    min_silhouette_threshold=min_silhouette,
+                    batch_size=batch_size,
+                    tracker=tracker
+                )
+
+            return f"✓ Recursive clustering completed. Processed {nodes_processed} nodes in cluster tree for namespace {namespace}"
+        except Exception as e:
+            logger.exception(f"Failed to run recursive clustering: {e}")
+            return f"✗ Failed to run recursive clustering: {e}"
 
 
 class ProjectCommand(Command):
@@ -1153,6 +1222,7 @@ class CommandInterpreter:
         self.parser.register_command(EmbedPagesCommand())
         self.parser.register_command(ReduceCommand())
         self.parser.register_command(ClusterCommand())
+        self.parser.register_command(RecursiveClusterCommand())
         self.parser.register_command(ProjectCommand())
         self.parser.register_command(StatusCommand())
         self.parser.register_command(HelpCommand(self.parser))
@@ -1223,19 +1293,27 @@ class CommandInterpreter:
         command = self.parser.commands.get(command_name)
         if command:
             for arg in command.get_required_args():
-                if arg.type == "integer":
-                    parser.add_argument(
-                        f"--{arg.name}", type=int, required=True, help=f"Required argument: {arg.name}"
-                    )
-                else:
-                    parser.add_argument(
-                        f"--{arg.name}", required=True, help=f"Required argument: {arg.name}"
-                    )
+                    if arg.type == "integer":
+                        parser.add_argument(
+                            f"--{arg.name}", type=int, required=True, help=f"Required argument: {arg.name}"
+                        )
+                    elif arg.type == "float":
+                        parser.add_argument(
+                            f"--{arg.name}", type=float, required=True, help=f"Required argument: {arg.name}"
+                        )
+                    else:
+                        parser.add_argument(
+                            f"--{arg.name}", required=True, help=f"Required argument: {arg.name}"
+                        )
 
             for arg in command.get_optional_args():
                 if arg.type == "integer":
                     parser.add_argument(
                         f"--{arg.name}", type=int, default=arg.default, help=f"Optional argument: {arg.name}"
+                    )
+                elif arg.type == "float":
+                    parser.add_argument(
+                        f"--{arg.name}", type=float, default=arg.default, help=f"Optional argument: {arg.name}"
                     )
                 else:
                     parser.add_argument(

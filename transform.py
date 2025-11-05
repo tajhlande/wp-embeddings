@@ -16,11 +16,14 @@ operate directly on the SQLite database via the helper utilities defined in
 from __future__ import annotations
 
 import logging
+import json
+import math
+from typing import Iterable, Iterator, List, Optional, Dict, Any
 
 import sqlite3
 import numpy as np
-
-from typing import Iterable, List, Optional
+from sklearn.metrics import silhouette_score
+from numpy.typing import NDArray
 
 from database import (
     get_clusters_needing_projection,
@@ -29,11 +32,18 @@ from database import (
     update_cluster_centroid,
     update_reduced_vector_for_page,
     update_three_d_vector_for_page,
+    insert_cluster_tree_node,
+    update_cluster_tree_child_count,
+    get_cluster_tree_nodes_by_parent,
+    get_cluster_tree_max_node_id,
+    get_page_reduced_vectors,
+    get_embedding_count,
+    numpy_to_bytes,
 )
 from progress_utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
-# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 
 # we are logging here because these import statements are sooooo slooooow
 logger.info("Initializing scikit-learn...")
@@ -300,3 +310,237 @@ def run_umap_per_cluster(
     sqlconn.commit()
     # logger.info("UMAP mapping completed for %s clusters.", processed)
     return processed
+
+
+def run_recursive_clustering(
+    sqlconn: sqlite3.Connection,
+    namespace: str,
+    leaf_target: int = 50,
+    max_k: int = 50,
+    max_depth: int = 10,
+    min_silhouette_threshold: float = 0.1,
+    batch_size: int = 10_000,
+    tracker: Optional[ProgressTracker] = None,
+) -> int:
+    """Run recursive clustering algorithm to build a tree of clusters.
+
+    Args:
+        sqlconn: SQLite database connection
+        namespace: Namespace to process
+        leaf_target: Target number of documents per leaf cluster
+        max_k: Maximum number of clusters to create at each level
+        max_depth: Maximum depth for recursion
+        min_silhouette_threshold: Minimum silhouette score to continue clustering
+        batch_size: Batch size for processing
+        tracker: Optional progress tracker
+
+    Returns:
+        Total number of nodes created in the cluster tree
+    """
+    logger.info("Starting recursive clustering with leaf_target=%s, max_k=%s, max_depth=%s",
+                leaf_target, max_k, max_depth)
+
+    # Get total document count for the namespace
+    pages_and_vectors = list(get_page_reduced_vectors(sqlconn=sqlconn, namespace=namespace))
+    doc_count = len(pages_and_vectors)
+    if doc_count == 0:
+        logger.warning("No reduced vectors for clustering found")
+        return 0
+
+    if doc_count < max_k:
+        logger.warning(f"Only found {len(pages_and_vectors)} reduced vectors, below max_k: {max_k}")
+        return 0
+    page_ids = [item[0] for item in pages_and_vectors]
+    page_vectors = np.array([item[1] for item in pages_and_vectors])
+
+    # Start with root node containing all documents
+    root_node_id = get_cluster_tree_max_node_id(sqlconn) + 1
+    logger.info("Creating root node with ID %s", root_node_id)
+
+    # Insert root node
+    inserted_node_id = insert_cluster_tree_node(
+        sqlconn=sqlconn,
+        namespace=namespace,
+        node_id=root_node_id,
+        parent_id=None,
+        depth=0,
+        centroid=None,  # Will be computed after clustering
+        doc_count=doc_count,
+        top_terms=None,
+        sample_doc_ids=None
+    )
+    logger.info("Inserted node ID: %d", inserted_node_id)
+    assert root_node_id == inserted_node_id
+
+    # Start recursive clustering from root
+    nodes_processed = _recursive_cluster_node(
+        sqlconn=sqlconn,
+        namespace=namespace,
+        page_ids=page_ids,
+        page_vectors=page_vectors,
+        node_id=root_node_id,
+        parent_id=None,
+        depth=0,
+        doc_count=doc_count,
+        leaf_target=leaf_target,
+        max_k=max_k,
+        max_depth=max_depth,
+        min_silhouette_threshold=min_silhouette_threshold,
+        batch_size=batch_size,
+        tracker=tracker
+    )
+
+    logger.info("Recursive clustering completed. Total nodes processed: %s", nodes_processed)
+    return nodes_processed
+
+
+def _recursive_cluster_node(
+    sqlconn: sqlite3.Connection,
+    namespace: str,
+    page_ids: list[int],
+    page_vectors: NDArray,
+    node_id: int,
+    parent_id: Optional[int],
+    depth: int,
+    doc_count: int,
+    leaf_target: int,
+    max_k: int,
+    max_depth: int,
+    min_silhouette_threshold: float,
+    batch_size: int,
+    tracker: Optional[ProgressTracker] = None,
+) -> int:
+    """Recursively cluster a single node.
+
+    Args:
+        sqlconn: SQLite database connection
+        namespace: Namespace to process
+        node_id: Current node ID
+        parent_id: Parent node ID
+        depth: Current depth in the tree
+        doc_count: Number of documents in this node
+        leaf_target: Target number of documents per leaf cluster
+        max_k: Maximum number of clusters to create at each level
+        max_depth: Maximum depth for recursion
+        min_silhouette_threshold: Minimum silhouette score to continue clustering
+        batch_size: Batch size for processing
+        tracker: Optional progress tracker
+
+    Returns:
+        Number of nodes processed (including this one)
+    """
+    logger.debug("Processing node %s at depth %s with %s documents", node_id, depth, doc_count)
+
+    # Check stopping conditions
+    if (doc_count <= leaf_target or
+        depth >= max_depth):
+        logger.debug("Node %s is a leaf (doc_count=%s, depth=%s)", node_id, doc_count, depth)
+        return 1
+
+
+
+    logger.debug("Processing %s vectors for node %s", len(page_vectors), node_id)
+
+    # Calculate k for this node
+    k = min(max_k, math.ceil(doc_count / leaf_target))
+    logger.debug("Node %s: k=%s (doc_count=%s, leaf_target=%s, max_k=%s)",
+                 node_id, k, doc_count, leaf_target, max_k)
+
+    if k <= 1:
+        logger.debug("Node %s cannot be split further (k=%s)", node_id, k)
+        return 1
+
+    # Perform clustering
+    kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=batch_size)
+    cluster_labels = kmeans.fit_predict(page_vectors)
+
+    # Calculate silhouette score to evaluate clustering quality
+    try:
+        silhouette_avg = silhouette_score(page_vectors, cluster_labels, metric='cosine')
+        logger.debug("Node %s silhouette score: %s", node_id, silhouette_avg)
+
+        if silhouette_avg < min_silhouette_threshold:
+            logger.debug("Node %s has poor clustering quality (silhouette=%s < %s), stopping recursion",
+                        node_id, silhouette_avg, min_silhouette_threshold)
+            return 1
+    except Exception as e:
+        logger.warning("Could not calculate silhouette score for node %s: %s", node_id, e)
+        silhouette_avg = 0.0
+
+    # Update node centroid
+    centroid = kmeans.cluster_centers_.mean(axis=0)
+    centroid_blob = numpy_to_bytes(centroid)
+    sqlconn.execute(
+        "UPDATE cluster_tree SET centroid = ? WHERE node_id = ?",
+        (centroid_blob, node_id)
+    )
+
+    # Process each child cluster
+    child_nodes = []
+    cluster_sizes = []
+
+    for cluster_id in range(k):
+        # Get documents belonging to this cluster
+        cluster_mask = cluster_labels == cluster_id
+        cluster_page_ids = [page_ids[i] for i in range(len(page_ids)) if cluster_mask[i]]
+        cluster_vectors = page_vectors[cluster_mask]
+
+        cluster_size = len(cluster_page_ids)
+        cluster_sizes.append(cluster_size)
+
+        logger.debug("Subcluster %d:%d has %s documents", node_id, cluster_id, cluster_size)
+
+        if cluster_size == 0:
+            continue
+
+        # Create child node
+        child_node_id = get_cluster_tree_max_node_id(sqlconn) + 1
+        child_nodes.append(child_node_id)
+
+        # Insert child node
+        inserted_node_id = insert_cluster_tree_node(
+            sqlconn=sqlconn,
+            namespace=namespace,
+            node_id=child_node_id,
+            parent_id=node_id,
+            depth=depth + 1,
+            centroid=None,  # Will be computed after clustering
+            doc_count=cluster_size,
+            top_terms=None,
+            sample_doc_ids=cluster_page_ids[:10]  # Sample first 10 doc IDs
+        )
+        logger.debug("Max node + 1: %d, inserted node id: %d", child_node_id, inserted_node_id)
+        assert child_node_id == inserted_node_id
+
+        # Recursively process child node
+        child_nodes_processed = _recursive_cluster_node(
+            sqlconn=sqlconn,
+            namespace=namespace,
+            page_ids=cluster_page_ids,
+            page_vectors=cluster_vectors,
+            node_id=child_node_id,
+            parent_id=node_id,
+            depth=depth + 1,
+            doc_count=cluster_size,
+            leaf_target=leaf_target,
+            max_k=max_k,
+            max_depth=max_depth,
+            min_silhouette_threshold=min_silhouette_threshold,
+            batch_size=batch_size,
+            tracker=tracker
+        )
+
+        # Add the child node ID once for each node it represents (including itself)
+        child_nodes.extend([child_node_id] * child_nodes_processed)
+
+    # Update child count for parent node
+    update_cluster_tree_child_count(node_id, len(child_nodes), sqlconn)
+
+    # Update progress tracker
+    if tracker:
+        tracker.update(1)
+
+    # Return total nodes processed (1 for this node + all child nodes)
+    return 1 + len(child_nodes)
+
+
