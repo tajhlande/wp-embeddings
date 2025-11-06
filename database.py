@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def ensure_tables(sqlconn: sqlite3.Connection):
     chunk_log_table_sql = """
-        CREATE TABLE IF NOT EXISTS chunk_log_2 (
+        CREATE TABLE IF NOT EXISTS chunk_log (
             namespace TEXT NOT NULL,
             chunk_name TEXT NOT NULL,
             chunk_archive_path TEXT,
@@ -34,7 +34,7 @@ def ensure_tables(sqlconn: sqlite3.Connection):
     FROM chunk_log;
     """
     page_log_table_sql = """
-        CREATE TABLE IF NOT EXISTS page_log_2 (
+        CREATE TABLE IF NOT EXISTS page_log (
             namespace TEXT NOT NULL,
             page_id INTEGER NOT NULL,
             title TEXT,
@@ -52,7 +52,7 @@ def ensure_tables(sqlconn: sqlite3.Connection):
     """
     # New tables for vector storage and clustering information
     page_vector_table_sql = """
-        CREATE TABLE IF NOT EXISTS page_vector_2 (
+        CREATE TABLE IF NOT EXISTS page_vector (
             namespace TEXT NOT NULL,
             page_id INTEGER NOT NULL REFERENCES page_log(page_id) ON DELETE CASCADE,
             embedding_vector BLOB,    -- original 2048-dim numpy array (float32)
