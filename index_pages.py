@@ -81,13 +81,18 @@ def compute_page_embeddings(
     try:
         return embedding_function(text_content)
     except openai.InternalServerError as e:
-        while "input is too large to process" in str(e) and len(text_content) > 1:
+        times_halved = 0
+        while "input is too large to process" in str(e) and len(text_content) > 0:
             try:
                 logger.warning("Cutting text content in half to fit context for page %d", page.page_id)
                 text_content = text_content[:len(text_content)//2]
+                times_halved += 1
                 return embedding_function(text_content)
             except openai.InternalServerError as e2:
                 e = e2
+        if len(text_content) == 0:
+            raise ValueError(f"Can't embed empty content for page {page.page_id}. "
+                             f"Times halved: {times_halved}. Current text content: '{text_content}'")
         raise
 
 
