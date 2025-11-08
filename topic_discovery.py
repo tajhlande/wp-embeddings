@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 TOPIC_GENERATION_SYSTEM_PROMPT = " ".join("""
-    You are a multi-lingual summarization assistant.
-    For any collection of submitted page titles and abstract information, you can
-    succinctly summarize the content into a topic description of the content.
-    The topic summary must be produced in the same language as the most common language in the
-    submitted topics and abstracts.
-    The topic must be the best description of the subject matter area across all the given
-    materials, while still maintaining clarity and distance from other topics.
+    You are a multi-lingual expert summarization assistant.
+    For any collection of submitted page titles, cluster topics, and abstract information, you can
+    succinctly produce a topic description of the content.
+    You should be using the same language as the most common language in the
+    submitted titles, topics, and abstracts.
+    The generated topic must be the best description of the subject matter area across all the given
+    materials, while maintaining clarity and distinctiveness from other topics.
 """.split())
 
 SUMMARIZING_MODEL_NAME_KEY = "SUMMARIZING_MODEL_NAME"
@@ -65,12 +65,15 @@ class TopicDiscovery:
         submitted_titles = ", ".join([page.title for page in page_list])
 
         prompt = " ".join(f"""
-            Describe the best common topic for the following page titles.
-            Only generate a topic, in a few words or word-equivalents if the language is non-Latin.
+            Describe the best common topic for the page titles listed below.
+            Only generate a topic, and no other content.
+            Use a few words or word-equivalents if the language is non-Latin.
+            Be descriptive, succinct but not terse.
             Do not generate any other text besides the topic.
             Only use punctuation as appropriate for the words in the topic.
             You do not need to produce a complete sentence and should not end the topic with a period
             or other sentence terminator.
+            The first word in the topic should be capitalized, if the language has capitalization.
             The page titles are: {submitted_titles}.
         """.split())
 
@@ -98,15 +101,80 @@ class TopicDiscovery:
                                         page_list: list[Page],
                                         neighboring_topics_list: list[str]
                                         ) -> Optional[str]:
-        # TODO let's just use page titles for now. we will introduce page abstract content later if we need it
         submitted_titles = ", ".join([page.title for page in page_list])
         neighboring_topics = ", ".join(neighboring_topics_list)
 
         prompt = " ".join(f"""
             Describe the best common topic for the following page titles.
-            Consider also the neighboring topics, and how best to ensure the generated topic
-            remains distinct from the neighboring topics, or at least as distinct is reasonable.
-            Only generate a topic, in a few words or word-equivalents if the language is non-Latin.
+            Consider also the neighboring topics, and generate a topic that
+            is as distinct from the neighboring topics as it can reasonably be, without distorting
+            the topic's descriptive power.
+            Only generate a topic, and no other content.
+            Use a few words or word-equivalents if the language is non-Latin.
+            Be descriptive, succinct but not terse.
+            Do not generate any other text besides the topic.
+            Only use punctuation as appropriate for the words in the topic.
+            You do not need to produce a complete sentence and should not end the topic with a period
+            or other sentence terminator.
+            The page titles are: {submitted_titles}.
+            The neighboring topics from which the generated topic should be distinct are: {neighboring_topics}.
+        """.split())
+
+        logger.debug("Prompt: %s", prompt)
+
+        completion = self._openai_client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "developer", "content": TOPIC_GENERATION_SYSTEM_PROMPT, },
+                {"role": "user", "content": prompt, },
+            ],
+        )
+
+        return completion.choices[0].message.content
+
+    def summarize_cluster_topics(self, child_topics: list[str]) -> Optional[str]:
+        submitted_topics = ", ".join([topic for topic in child_topics if topic is not None])
+
+        prompt = " ".join(f"""
+            Describe the best common topic for the cluster topics listed below.
+            Only generate a topic, and no other content.
+            Use a few words or word-equivalents if the language is non-Latin.
+            Be descriptive, succinct but not terse.
+            Do not generate any other text besides the topic.
+            Only use punctuation as appropriate for the words in the topic.
+            You do not need to produce a complete sentence and should not end the topic with a period
+            or other sentence terminator.
+            The first word in the topic should be capitalized, if the language has capitalization.
+            The cluster topic are: {submitted_topics}.
+        """.split())
+
+        logger.debug("Prompt: %s", prompt)
+
+        completion = self._openai_client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "developer", "content": TOPIC_GENERATION_SYSTEM_PROMPT, },
+                {"role": "user", "content": prompt, },
+            ],
+        )
+
+        return completion.choices[0].message.content
+
+    def adversely_summarize_cluster_topics(self,
+                                           child_topics: list[str],
+                                           neighboring_topics_list: list[str]
+                                           ) -> Optional[str]:
+        submitted_titles = ", ".join([topic for topic in child_topics if topic is not None])
+        neighboring_topics = ", ".join(neighboring_topics_list)
+
+        prompt = " ".join(f"""
+            Describe the best common topic for the following page titles.
+            Consider also the neighboring topics, and generate a topic that
+            is as distinct from the neighboring topics as it can reasonably be, without distorting
+            the topic's descriptive power.
+            Only generate a topic, and no other content.
+            Use a few words or word-equivalents if the language is non-Latin.
+            Be descriptive, succinct but not terse.
             Do not generate any other text besides the topic.
             Only use punctuation as appropriate for the words in the topic.
             You do not need to produce a complete sentence and should not end the topic with a period

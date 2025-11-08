@@ -12,7 +12,9 @@ from typing import Dict, List, Any, Optional
 # Import existing modules
 from database import (
     delete_cluster_tree,
+    get_cluster_children_topics,
     get_cluster_node_first_pass_topic,
+    get_cluster_node_ids_with_missing_topics,
     get_cluster_parent_id,
     get_embedding_count,
     get_leaf_cluster_node_count,
@@ -23,6 +25,7 @@ from database import (
     get_sql_conn,
     ensure_tables,
     get_page_ids_needing_embedding_for_chunk,
+    remove_existing_cluster_topics,
     update_cluster_tree_final_labels,
     update_cluster_tree_first_labels,
 )
@@ -1040,10 +1043,12 @@ class TopicsCommand(Command):
             sqlconn = get_sql_conn()
             topic_discovery = TopicDiscovery.get_from_env()
 
+            remove_existing_cluster_topics(sqlconn, namespace)
+
             cluster_count = get_leaf_cluster_node_count(sqlconn, namespace)
             first_topic_list: list[tuple[int, Optional[str]]] = []
 
-            with ProgressTracker(description="Cluster topic pass 1/2",
+            with ProgressTracker(description="Cluster topic pass 1/4",
                                  unit="cluster",
                                  total=cluster_count) as tracker:
                 node_id_list = get_leaf_cluster_node_ids(sqlconn, namespace)
@@ -1056,7 +1061,7 @@ class TopicsCommand(Command):
                 update_cluster_tree_first_labels(sqlconn, namespace, first_topic_list)
 
             final_topic_list: list[tuple[int, Optional[str]]] = []
-            with ProgressTracker(description="Cluster topic pass 2/2",
+            with ProgressTracker(description="Cluster topic pass 2/4",
                                  unit="cluster",
                                  total=cluster_count) as tracker:
                 node_id_list = get_leaf_cluster_node_ids(sqlconn, namespace)
@@ -1078,6 +1083,45 @@ class TopicsCommand(Command):
                     tracker.update(1)
 
                 update_cluster_tree_final_labels(sqlconn, namespace, final_topic_list)
+
+            missed_topic_first_list = []
+            node_id_list = get_cluster_node_ids_with_missing_topics(sqlconn, namespace)
+
+            with ProgressTracker(description="Missing topic pass 3/4",
+                                 unit="cluster",
+                                 total=len(node_id_list)) as tracker:
+                for node_id in node_id_list:
+                    cluster_children_topics = get_cluster_children_topics(sqlconn, namespace, node_id)
+                    first_pass_topic = topic_discovery.summarize_cluster_topics(cluster_children_topics)
+                    missed_topic_first_list.append((node_id, first_pass_topic, ))
+                    tracker.update(1)
+
+            update_cluster_tree_first_labels(sqlconn, namespace, missed_topic_first_list)
+
+            missed_topic_final_list = []
+
+            with ProgressTracker(description="Missing topic pass 4/4",
+                                 unit="cluster",
+                                 total=len(node_id_list)) as tracker:
+                for node_id in node_id_list:
+                    cluster_children_topics = get_cluster_children_topics(sqlconn, namespace, node_id)
+                    parent_node_id = get_cluster_parent_id(sqlconn, namespace, node_id)
+                    if parent_node_id is None:
+                        # TODO look up and set to wiki name based on namespace
+                        final_pass_topic = get_cluster_node_first_pass_topic(sqlconn, namespace, node_id)
+                    else:
+                        neighbor_topic_list = get_neighboring_first_topics(
+                            sqlconn, namespace, node_id=node_id, parent_node_id=parent_node_id)
+                        # logger.info("\nNeighboring topic list: %s", json.dumps(neighbor_topic_list))
+                        if not neighbor_topic_list:
+                            final_pass_topic = get_cluster_node_first_pass_topic(sqlconn, namespace, node_id)
+                        else:
+                            final_pass_topic = topic_discovery.adversely_summarize_cluster_topics(
+                                cluster_children_topics, neighbor_topic_list)
+                    missed_topic_final_list.append((node_id, final_pass_topic, ))
+                    tracker.update(1)
+
+                update_cluster_tree_final_labels(sqlconn, namespace, missed_topic_final_list)
 
             return Result.SUCCESS, f"{CHECK} Completed cluster topic discovery for namespace {namespace}."
 

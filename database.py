@@ -1128,3 +1128,80 @@ def get_cluster_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> lis
             pass
         logger.exception(f"Failed to get final topics for cluster in namespace {namespace}: {e}")
         raise
+
+
+def get_cluster_node_ids_with_missing_topics(sqlconn: sqlite3.Connection, namespace: str) -> list[int]:
+    """
+    Find the cluster nodes that are missing topics. They tend to be near the root of the tree.
+    Higher depth nodes should be listed first, so that they can be processed earlier,
+    to provide input to lower depth nodes.
+    """
+    sql = """
+        SELECT node_id
+        FROM cluster_tree
+        WHERE namespace = ?
+        AND first_label IS NULL
+        ORDER BY depth DESC
+    """
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(sql, (namespace,))
+        rows = cursor.fetchall()
+        return [row[0] for row in rows]
+
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to get cluster node ids with missing first topics for namespace {namespace}: {e}")
+        raise
+
+
+def get_cluster_children_topics(sqlconn: sqlite3.Connection, namespace: str, node_id: int):
+    """Get the topics of the cluster node's children"""
+    sql = """
+        SELECT COALESCE(final_label, first_label) as label
+        FROM cluster_tree
+        WHERE namespace = ?
+        AND parent_id = ?
+        AND label IS NOT NULL
+    """
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(sql, (namespace, node_id, ))
+        rows = cursor.fetchall()
+        return [row[0] for row in rows]
+
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to get cluster children topics for cluster {node_id} in namespace {namespace}: {e}")
+        raise
+
+
+def remove_existing_cluster_topics(sqlconn, namespace):
+    """Remove existing topics for cluster """
+    sql = """
+        UPDATE cluster_tree
+        SET first_label = NULL,
+            final_label = NULL
+        WHERE namespace = ?
+    """
+    try:
+        cursor = sqlconn.cursor()
+        cursor.execute(sql, (namespace,))
+        sqlconn.commit()
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
+            pass
+        logger.exception(f"Failed to remove labels on cluster tree for namespace {namespace}: {e}")
+        raise
+
