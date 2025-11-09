@@ -99,7 +99,7 @@ def compute_page_embeddings(
         if len(text_content) == 0:
             raise ValueError(f"Can't embed empty content for page {page.page_id}. "
                              f"Times halved: {times_halved}. Current text content: '{text_content}'")
-        logger.warning("Some other kind of message besides 'input is too large to process': {e.message}")
+        logger.warning(f"Some other kind of message besides 'input is too large to process': {e.message}")
         raise
 
 
