@@ -31,7 +31,7 @@ from database import (
     three_d_vector_to_text,
     update_cluster_centroid,
     update_cluster_tree_assignments,
-    update_reduced_vector_for_page,
+    update_reduced_vectors_in_batch,
     update_three_d_vector_for_page,
     insert_cluster_tree_node,
     update_cluster_tree_child_count,
@@ -42,7 +42,9 @@ from database import (
 from progress_utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
+numba_logger = logging.getLogger("numba.core")
+numba_logger.setLevel(logging.WARNING)
 
 # we are logging here because these import statements are sooooo slooooow
 logger.info("Initializing scikit-learn...")
@@ -54,46 +56,74 @@ import umap.umap_ as umap  # noqa E402
 logger = logging.getLogger(__name__)
 
 
+# def _batch_iterator(
+#     sqlconn: sqlite3.Connection,
+#     namespace: str,
+#     columns: List[str],
+#     batch_size: int = 10_000,
+# ) -> Iterable[List[dict]]:
+#     """Yield batches of rows to avoid loading the entire table into memory.
+
+#     ``columns`` are passed to ``fetch_page_vectors``. Each yielded list contains
+#     batch_size dicts, each with the requested columns plus ``page_id``.
+#     """
+#     offset = 0
+#     while True:
+#         # SQLite does not support OFFSET in a straightforward way without
+#         # ordering, but for our use-case ordering is not required - we simply
+#         # fetch a limited number of rows each iteration.
+#         sql = f"""
+#             SELECT page_id, {', '.join(columns)}
+#             FROM page_vector
+#             WHERE namespace = :namespace
+#             {''.join([f"AND {column} IS NOT NULL " for column in columns])}
+#             ORDER BY page_id ASC
+#             LIMIT {batch_size} OFFSET {offset};
+#             """
+#         logger.debug("SQL query: %s", sql)
+#         cursor = sqlconn.execute(sql, {"namespace": namespace})
+#         rows = cursor.fetchall()
+#         if not rows:
+#             break
+
+#         batch = []
+#         for row in rows:
+#             result = {"page_id": row["page_id"]}
+#             for col in columns:
+#                 result[col] = row[col]
+#             batch.append(result)
+
+#         yield batch
+#         offset += batch_size
+
+
 def _batch_iterator(
     sqlconn: sqlite3.Connection,
     namespace: str,
-    columns: List[str],
+    columns: list[str],
     batch_size: int = 10_000,
-) -> Iterable[List[dict]]:
-    """Yield batches of rows to avoid loading the entire table into memory.
-
-    ``columns`` are passed to ``fetch_page_vectors``. Each yielded list contains
-    batch_size dicts, each with the requested columns plus ``page_id``.
+) -> Iterable[list[dict]]:
+    """Yield batches of rows without re-querying or using OFFSET."""
+    sql = f"""
+        SELECT page_id, {', '.join(columns)}
+        FROM page_vector
+        WHERE namespace = :namespace
+        {''.join([f"AND {column} IS NOT NULL " for column in columns])}
+        ORDER BY page_id ASC;
     """
-    offset = 0
+    logger.debug("SQL query: %s", sql)
+    cursor = sqlconn.execute(sql, {"namespace": namespace})
+
     while True:
-        # SQLite does not support OFFSET in a straightforward way without
-        # ordering, but for our use-case ordering is not required - we simply
-        # fetch a limited number of rows each iteration.
-        sql = f"""
-            SELECT page_vector.page_id, {', '.join(columns)}
-            FROM page_vector
-            INNER JOIN page_log ON page_vector.page_id = page_log.page_id
-            INNER JOIN chunk_log ON page_log.chunk_name = chunk_log.chunk_name
-            WHERE chunk_log.namespace = :namespace
-            {''.join([f"AND {column} IS NOT NULL " for column in columns])}
-            ORDER BY chunk_log.chunk_name ASC, page_log.page_id ASC
-            LIMIT {batch_size} OFFSET {offset};
-            """
-        cursor = sqlconn.execute(sql, {"namespace": namespace})
-        rows = cursor.fetchall()
+        rows = cursor.fetchmany(batch_size)
         if not rows:
             break
 
-        batch = []
-        for row in rows:
-            result = {"page_id": row["page_id"]}
-            for col in columns:
-                result[col] = row[col]
-            batch.append(result)
-
+        batch = [
+            {"page_id": row["page_id"], **{col: row[col] for col in columns}}
+            for row in rows
+        ]
         yield batch
-        offset += batch_size
 
 
 def run_pca(
@@ -124,36 +154,85 @@ def run_pca(
     batch_counter = 0
     total_vectors = 0
 
-    for batch in _batch_iterator(
-        sqlconn, namespace, ["embedding_vector"], effective_batch_size
-    ):
-        # Stack all vectors in this batch into a single matrix
-        batch_vectors = []
-        for row in batch:
-            vectors = np.frombuffer(row["embedding_vector"], dtype=np.float32)
-            # Original embeddings are 2048-dimensional; reshape accordingly.
-            vectors = vectors.reshape(1, -1)  # each row is a single vector
-            batch_vectors.append(vectors)
+    logger.debug("First pass: stacking vectors in matrix")
+    # for batch in _batch_iterator(
+    #     sqlconn, namespace, ["embedding_vector"], effective_batch_size
+    # ):
+    #     # Stack all vectors in this batch into a single matrix
+    #     batch_vectors = []
+    #     for row in batch:
+    #         vectors = np.frombuffer(row["embedding_vector"], dtype=np.float32)
+    #         # Original embeddings are 2048-dimensional; reshape accordingly.
+    #         vectors = vectors.reshape(1, -1)  # each row is a single vector
+    #         batch_vectors.append(vectors)
 
-        if batch_vectors:
-            batch_matrix = np.vstack(batch_vectors)
-            ipca.partial_fit(batch_matrix)
-            tracker.update(1) if tracker else None
-            batch_counter += 1
-            total_vectors += len(batch)
+    #     if batch_vectors:
+    #         batch_matrix = np.vstack(batch_vectors)
+    #         ipca.partial_fit(batch_matrix)
+    #         tracker.update(1) if tracker else None
+    #         batch_counter += 1
+    #         total_vectors += len(batch)
 
-    # Second pass - transform and store
+    for batch in _batch_iterator(sqlconn, namespace, ["embedding_vector"], effective_batch_size):
+        # Decode all embeddings into a single matrix efficiently
+        batch_matrix = np.frombuffer(b"".join(row["embedding_vector"] for row in batch), dtype=np.float32)
+        batch_matrix = batch_matrix.reshape(len(batch), 2048)
+
+        ipca.partial_fit(batch_matrix)
+        tracker.update(1) if tracker else None
+        batch_counter += 1
+        total_vectors += len(batch)
+
+    # def _embed_to_reduced_bytes(embed: NDArray) -> bytes:
+    #     vec = np.frombuffer(embed, dtype=np.float32).reshape(
+    #         1, -1
+    #     )
+    #     return ipca.transform(vec).astype(np.float32).squeeze().tobytes()
+
+    # # Second pass - transform and store
+    # logger.debug("Second pass: transforming and storing vectors in matrix")
+    # for batch in _batch_iterator(sqlconn, namespace, ["embedding_vector"], batch_size):
+    #     # Process each vector in the batch
+    #     logger.debug("Transforming vectors")
+    #     vectors_and_pages = [(_embed_to_reduced_bytes(r['embedding_vector']), r['page_id'], ) for r in batch]
+    #     update_reduced_vectors_in_batch(vectors_and_pages, sqlconn)
+    #     # for row in batch:
+    #     #     vec = np.frombuffer(row["embedding_vector"], dtype=np.float32).reshape(
+    #     #         1, -1
+    #     #     )
+    #     #     reduced = ipca.transform(vec).astype(np.float32).squeeze()
+    #     #     update_reduced_vector_for_page(row["page_id"], reduced, sqlconn)
+    #     tracker.update(1) if tracker else None
+
+    logger.debug("Second pass: transforming and storing vectors in matrix")
+
     for batch in _batch_iterator(sqlconn, namespace, ["embedding_vector"], batch_size):
-        # Process each vector in the batch
-        for row in batch:
-            vec = np.frombuffer(row["embedding_vector"], dtype=np.float32).reshape(
-                1, -1
-            )
-            reduced = ipca.transform(vec).astype(np.float32).squeeze()
-            update_reduced_vector_for_page(row["page_id"], reduced, sqlconn)
+        # Decode the whole batch into one 2D array efficiently
+        logger.debug("Creating batch matrix")
+        batch_matrix = np.frombuffer(
+            b"".join(row["embedding_vector"] for row in batch),
+            dtype=np.float32,
+        ).reshape(len(batch), -1)
+
+        # Apply PCA transform once per batch (vectorized)
+        logger.debug("Applying PCA transform to batch")
+        reduced = ipca.transform(batch_matrix).astype(np.float32)
+
+        # Convert all reduced vectors to bytes in one go
+        logger.debug("Converting reduced vectors to bytes")
+        reduced_bytes = [r.tobytes() for r in reduced]
+        page_ids = [row["page_id"] for row in batch]
+
+        # Combine for DB update
+        logger.debug("Zipping list for database update")
+        vectors_and_pages = list(zip(reduced_bytes, page_ids))
+        logger.debug("Invoking update_reduced_vectors_in_batch")
+        update_reduced_vectors_in_batch(namespace, vectors_and_pages, sqlconn)
+
         tracker.update(1) if tracker else None
 
     # logger.info("PCA completed and reduced vectors stored.")
+    logger.debug("Done with PCA")
     return batch_counter, total_vectors
 
 

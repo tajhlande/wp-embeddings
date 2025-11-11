@@ -9,6 +9,10 @@ from classes import Page
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+openai_logger = logging.getLogger("openai")
+openai_logger.setLevel(logging.WARNING)
+httpcore_logger = logging.getLogger("httpcore")
+httpcore_logger.setLevel(logging.WARNING)
 
 TOPIC_GENERATION_SYSTEM_PROMPT = " ".join("""
     You are a multi-lingual expert summarization assistant.

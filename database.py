@@ -3,7 +3,7 @@ import json
 import sqlite3
 import logging
 from dataclasses import asdict, fields
-from typing import Iterator, Optional, Type, TypeVar, List
+from typing import Iterable, Iterator, Optional, Type, TypeVar, List
 
 import numpy as np
 
@@ -11,8 +11,9 @@ from numpy.typing import NDArray
 
 from classes import Chunk, ClusterTreeNode, Page, PageVectors, Vector3D
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def ensure_tables(sqlconn: sqlite3.Connection):
@@ -565,6 +566,36 @@ def update_reduced_vector_for_page(
             )
             pass
         logger.exception(f"Failed to update reduced vector for page {page_id}: {e}")
+        raise
+
+
+def update_reduced_vectors_in_batch(
+        namespace: str,
+        reduced_vector_bytes_and_page_id_list: Iterable[tuple[bytes, int]],
+        sqlconn: sqlite3.Connection
+) -> None:
+    update_page_vector_sql = f"""
+        UPDATE page_vector
+        SET reduced_vector = ?
+        WHERE namespace = '{namespace}' AND page_id = ?;
+    """
+
+    try:
+        logger.debug("Updating reduced vectors in batch")
+        cursor = sqlconn.cursor()
+        cursor.executemany(update_page_vector_sql, reduced_vector_bytes_and_page_id_list)
+        logger.debug("Committing reduced vectors in batch")
+        sqlconn.commit()
+        logger.debug("Completed update of reduced in batch")
+    except sqlite3.Error as e:
+        try:
+            sqlconn.rollback()
+        except Exception as e1:
+            logger.error(
+                f"Failed to roll back sql transaction while handling another error: {e1}"
+            )
+            pass
+        logger.exception(f"Failed to update reduced vectors in batch: {e}")
         raise
 
 

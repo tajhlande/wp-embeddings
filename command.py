@@ -878,7 +878,7 @@ class ReduceCommand(Command):
 
             with ProgressTracker(
                 "PCA Reduction (two pass)",
-                unit="batches",
+                unit="batch",
                 total=estimated_batch_count * 2,
             ) as tracker:
                 batch_count, total_vector_count = run_pca(
