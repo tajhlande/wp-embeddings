@@ -115,6 +115,9 @@ def ensure_tables(sqlconn: sqlite3.Connection):
         sqlconn.execute(
             "CREATE INDEX IF NOT EXISTS idx_cluster_tree_depth ON cluster_tree(depth);"
         )
+
+        # performance pragmas
+
     except sqlite3.Error as e:
         logger.error(f"Failed to create tables: {e}")
         raise

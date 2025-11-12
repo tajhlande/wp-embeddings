@@ -1046,6 +1046,7 @@ class TopicsCommand(Command):
             remove_existing_cluster_topics(sqlconn, namespace)
 
             cluster_count = get_leaf_cluster_node_count(sqlconn, namespace)
+            logger.debug("Cluster count: %d", cluster_count)
             first_topic_list: list[tuple[int, Optional[str]]] = []
 
             with ProgressTracker(description="Cluster topic pass 1/4",

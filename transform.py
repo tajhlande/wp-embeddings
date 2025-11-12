@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Iterable, List, Optional
+from typing import Iterable, Optional
 
 import sqlite3
 import numpy as np
@@ -390,6 +390,17 @@ def run_umap_per_cluster(
     return processed
 
 
+def fast_silhouette_score(X, labels, metric='cosine', sample_size=10000):
+    if len(X) > sample_size:
+        idx = np.random.choice(len(X), sample_size, replace=False)
+        X_sample = X[idx]
+        labels_sample = np.array(labels)[idx]
+    else:
+        X_sample = X
+        labels_sample = labels
+    return silhouette_score(X_sample, labels_sample, metric=metric)
+
+
 def run_recursive_clustering(
     sqlconn: sqlite3.Connection,
     namespace: str,
@@ -523,12 +534,19 @@ def _recursive_cluster_node(
         return 1
 
     # Perform clustering
-    kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=batch_size)
+    logger.debug("Calculating mini batch k-means for node %d", node_id)
+    kmeans = MiniBatchKMeans(n_clusters=k,
+                             random_state=42,
+                             batch_size=batch_size,
+                             max_iter=50,
+                             n_init=1,
+                             reassignment_ratio=0.01)
     cluster_labels = kmeans.fit_predict(page_vectors)
 
     # Calculate silhouette score to evaluate clustering quality
     try:
-        silhouette_avg = silhouette_score(page_vectors, cluster_labels, metric='cosine')
+        logger.debug("Calculating silhouette score for node %d", node_id)
+        silhouette_avg = fast_silhouette_score(page_vectors, cluster_labels, metric='cosine')
         logger.debug("Node %s silhouette score: %s", node_id, silhouette_avg)
 
         if silhouette_avg < min_silhouette_threshold:
@@ -540,6 +558,7 @@ def _recursive_cluster_node(
         silhouette_avg = 0.0
 
     # Update node centroid
+    logger.debug("Updating centroid for node %d", node_id)
     centroid = kmeans.cluster_centers_.mean(axis=0)
     centroid_blob = numpy_to_bytes(centroid)
     sqlconn.execute(

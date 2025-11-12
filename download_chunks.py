@@ -380,8 +380,17 @@ if __name__ == "__main__":
     sqlconn = get_sql_conn()
     ensure_tables(sqlconn)
     # process_one_chunk()
+    logger.info("Getting enterprise auth client")
     auth_client, refresh_token, access_token = get_enterprise_auth_client()
 
     with revoke_token_on_exit(auth_client, refresh_token):
+        logger.info("Getting enterprise api client")
         api_client = get_enterprise_api_client(access_token)
-        get_chunk_info_for_namespace("enwiki_namespace_0", api_client, sqlconn)
+        # et_chunk_info_for_namespace("enwiki_namespace_0", api_client, sqlconn)
+
+        # get list of namespaces
+        request = Request()  # filters=[Filter(field="in_language.identifier", value="en")])
+        namespaces = api_client.get_namespaces(request)
+        print(f"Found {len(namespaces)} namespaces")
+        for dict in namespaces:
+            print(f"{json.dumps(dict)}")
