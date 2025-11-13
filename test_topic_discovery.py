@@ -9,7 +9,7 @@ from database import (
     get_sql_conn,
     _row_to_dataclass
 )
-from topic_discovery import TopicDiscovery
+from topic_discovery import TopicDiscovery, get_system_prompt_for_namespace
 
 
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +32,7 @@ def test_topic_summary_llm_call():
     """
     #        AND page_vector.cluster_node_id = 10
 
-    sqlconn = get_sql_conn()
+    sqlconn = get_sql_conn("enwiki_namespace_0")
     cursor = sqlconn.cursor()
     cursor.execute(page_list_sql)
     rows = cursor.fetchall()
@@ -59,8 +59,8 @@ def test_adverse_topic_summary():
         17
     """
 
-    sqlconn = get_sql_conn()
     namespace = "enwiki_namespace_0"
+    sqlconn = get_sql_conn(namespace)
     cluster_id = 3
     parent_id = get_cluster_parent_id(sqlconn, namespace, cluster_id)
     assert parent_id is not None
@@ -80,5 +80,16 @@ def test_adverse_topic_summary():
     logger.debug(f"Final pass topic: {final_topic}")
 
 
-if __name__ == "__main__":
-    test_adverse_topic_summary()
+def test_system_prompt_generation():
+    generated_prompt = get_system_prompt_for_namespace("dewiki_namespace_0")
+    assert "Generated output should only be in German." in generated_prompt
+
+    generated_prompt = get_system_prompt_for_namespace("enwiki_namespace_0")
+    assert "Generated output should only be in English." in generated_prompt
+
+    generated_prompt = get_system_prompt_for_namespace("arzwiki_namespace_0")
+    assert "Generated output should only be in Egyptian Arabic." in generated_prompt
+
+
+# if __name__ == "__main__":
+#     test_adverse_topic_summary()

@@ -12,18 +12,20 @@ wheels/
 # env secrets
 .env
 
-# work directories and files
-downloaded
-extracted
-chunk_log.db
+# database files
+*.db
 *.db-journal
 *.db-shm
 *.db-wal
+*.duckdb
+*.wal
+
+# work directories and files
+downloaded
+extracted
 *.json
 *.ndjson
 enwiki_namespace_0_chunk_0_line_1.txt
 .wp_transform_history
 *.png
 cluster_tree.html
-*.duckdb
-*.wal

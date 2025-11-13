@@ -1,11 +1,12 @@
 import logging
 import os
-from typing import Optional
+from typing import Dict, Optional
 from dotenv import load_dotenv
 
 from openai import OpenAI
 
 from classes import Page
+from languages import get_language_for_namespace
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -18,16 +19,31 @@ TOPIC_GENERATION_SYSTEM_PROMPT = " ".join("""
     You are a multi-lingual expert summarization assistant.
     For any collection of submitted page titles, cluster topics, and abstract information, you can
     succinctly produce a topic description of the content.
-    You should be using the same language as the most common language in the
-    submitted titles, topics, and abstracts.
     The generated topic must be the best description of the subject matter area across all the given
     materials, while maintaining clarity and distinctiveness from other topics.
 """.split())
+# moving this part out because we'll describe the language per the namespace.
+"""    You should be using the same language as the most common language in the
+    submitted titles, topics, and abstracts."""
 
 SUMMARIZING_MODEL_NAME_KEY = "SUMMARIZING_MODEL_NAME"
 SUMMARIZING_MODEL_API_URL_KEY = "SUMMARIZING_MODEL_API_URL"
 SUMMARIZING_MODEL_API_KEY_KEY = "SUMMARIZING_MODEL_API_KEY"
 DEFAULT_MODEL_NAME = "gpt-oss-20b"
+
+namespace_to_system_prompt_dict: Dict[str, str] = dict()
+
+
+def get_system_prompt_for_namespace(namespace: str) -> str:
+    if namespace in namespace_to_system_prompt_dict:
+        return namespace_to_system_prompt_dict[namespace]
+
+    language = get_language_for_namespace(namespace)
+
+    prompt = f"{TOPIC_GENERATION_SYSTEM_PROMPT} " \
+             f"Generated output should only be in {language}."
+    namespace_to_system_prompt_dict[namespace] = prompt
+    return prompt
 
 
 class TopicDiscovery:

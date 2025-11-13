@@ -353,7 +353,7 @@ def process_one_chunk():
     else:
         logger.error("Failed to extract file from chunk")
 
-    sqlconn = get_sql_conn()
+    sqlconn = get_sql_conn(namespace)
     parse_chunk_file(
         sqlconn, namespace, chunk_name, os.path.join(extracted_chunk_path, extracted_file_name)
     )
@@ -377,7 +377,7 @@ def get_chunk_info_for_namespace(
 
 
 if __name__ == "__main__":
-    sqlconn = get_sql_conn()
+    sqlconn = get_sql_conn("enwiki_namespace_0")
     ensure_tables(sqlconn)
     # process_one_chunk()
     logger.info("Getting enterprise auth client")
@@ -392,5 +392,5 @@ if __name__ == "__main__":
         request = Request()  # filters=[Filter(field="in_language.identifier", value="en")])
         namespaces = api_client.get_namespaces(request)
         print(f"Found {len(namespaces)} namespaces")
-        for dict in namespaces:
-            print(f"{json.dumps(dict)}")
+        for d in namespaces:
+            print(f"{json.dumps(d)}")

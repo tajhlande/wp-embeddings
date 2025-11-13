@@ -325,7 +325,7 @@ class RefreshChunkDataCommand(Command):
         logger.info("Refreshing chunk data for namespace: %s", namespace)
 
         try:
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             api_client = self._get_api_client()
@@ -367,15 +367,15 @@ class DownloadChunksCommand(Command):
         super().__init__(
             name="download",
             description="Download chunks that haven't been downloaded yet",
-            expected_args=[OPTIONAL_CHUNK_LIMIT_ARGUMENT, OPTIONAL_NAMESPACE_ARGUMENT]
+            expected_args=[OPTIONAL_CHUNK_LIMIT_ARGUMENT, REQUIRED_NAMESPACE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> tuple[Result, str]:
         limit = args.get(OPTIONAL_CHUNK_LIMIT_ARGUMENT.name, OPTIONAL_CHUNK_LIMIT_ARGUMENT.default)
-        namespace = args.get(OPTIONAL_NAMESPACE_ARGUMENT.name)
+        namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
         try:
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             # Get chunks that need downloading
@@ -487,15 +487,15 @@ class UnpackProcessChunksCommand(Command):
         super().__init__(
             name="unpack",
             description="Unpack and process downloaded chunks",
-            expected_args=[OPTIONAL_NAMESPACE_ARGUMENT, OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT]
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT, OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> tuple[Result, str]:
-        namespace = args.get(OPTIONAL_NAMESPACE_ARGUMENT.name)
+        namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
         limit = args.get(OPTIONAL_CHUNK_LIMIT_NO_DEFAULT_ARGUMENT.name)
 
         try:
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             # Get chunks that need unpacking
@@ -636,7 +636,7 @@ class EmbedPagesCommand(Command):
             name="embed",
             description="Process remaining pages for embedding computation",
             expected_args=[
-                OPTIONAL_NAMESPACE_ARGUMENT,
+                REQUIRED_NAMESPACE_ARGUMENT,
                 OPTIONAL_CHUNK_NAME_ARGUMENT,
                 OPTIONAL_PAGE_LIMIT_NO_DEFAULT_ARGUMENT
             ]
@@ -649,7 +649,7 @@ class EmbedPagesCommand(Command):
         self.embedding_model_api_key = embedding_model_api_key
 
     def execute(self, args: Dict[str, Any]) -> tuple[Result, str]:
-        namespace = args.get(OPTIONAL_NAMESPACE_ARGUMENT.name)
+        namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
         chunk_name = args.get(OPTIONAL_CHUNK_NAME_ARGUMENT.name)
 
         if chunk_name and not namespace:
@@ -665,7 +665,7 @@ class EmbedPagesCommand(Command):
         )
 
         try:
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             # Setup embedding function
@@ -849,7 +849,7 @@ class ReduceCommand(Command):
         try:
             namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             target_dim = args.get(TARGET_DIMENSIONS_ARGUMENT.name, TARGET_DIMENSIONS_ARGUMENT.default)
@@ -924,7 +924,7 @@ class ClusterCommand(Command):
         try:
             namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             num_clusters = args.get(CLUSTER_COUNT_ARGUMENT.name, CLUSTER_COUNT_ARGUMENT.default)
@@ -993,7 +993,7 @@ class RecursiveClusterCommand(Command):
             min_silhouette = args.get(MIN_SILHOUETTE_ARGUMENT.name, MIN_SILHOUETTE_ARGUMENT.default)
             batch_size = args.get(BATCH_SIZE_ARGUMENT.name, BATCH_SIZE_ARGUMENT.default)
 
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             print(f"Running recursive clustering on namespace {namespace}")
@@ -1040,7 +1040,7 @@ class TopicsCommand(Command):
         try:
             namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
 
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             topic_discovery = TopicDiscovery.get_from_env()
 
             remove_existing_cluster_topics(sqlconn, namespace)
@@ -1146,7 +1146,7 @@ class ProjectCommand(Command):
             namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
             limit = args.get(OPTIONAL_CLUSTER_LIMIT_ARGUMENT.name)
 
-            sqlconn = get_sql_conn()
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             with ProgressTracker(description="Projecting into 3-space", unit="vectors") as tracker:
@@ -1169,12 +1169,13 @@ class StatusCommand(Command):
         super().__init__(
             name="status",
             description="Show current data status",
-            expected_args=[]
+            expected_args=[REQUIRED_NAMESPACE_ARGUMENT]
         )
 
     def execute(self, args: Dict[str, Any]) -> tuple[Result, str]:
         try:
-            sqlconn = get_sql_conn()
+            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
+            sqlconn = get_sql_conn(namespace)
             ensure_tables(sqlconn)
 
             # get distinct namespaces

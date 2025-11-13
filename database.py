@@ -1,5 +1,6 @@
 from enum import StrEnum
 import json
+import os
 import sqlite3
 import logging
 from dataclasses import asdict, fields
@@ -131,7 +132,7 @@ class VectorType(StrEnum):
 _sqlconns = {}
 
 
-def get_sql_conn(db_file: str = "chunk_log.db") -> sqlite3.Connection:
+def _get_sql_conn_for_file(db_file: str = "chunk_log.db") -> sqlite3.Connection:
     # if we already created a connection, just return that
     if _sqlconns.get(db_file):
         return _sqlconns[db_file]
@@ -153,6 +154,13 @@ def get_sql_conn(db_file: str = "chunk_log.db") -> sqlite3.Connection:
     # cache the connection for reuse later
     _sqlconns[db_file] = sqlconn
     return sqlconn
+
+
+def get_sql_conn(namespace: str, db_directory: str = "") -> sqlite3.Connection:
+    # convert the namespace to a db file path
+    db_file_path = os.path.join(db_directory, f"{namespace}.db")
+    logger.debug("Namespace: %s, db file: %s", namespace, db_file_path)
+    return _get_sql_conn_for_file(db_file_path)
 
 
 T = TypeVar("T")
