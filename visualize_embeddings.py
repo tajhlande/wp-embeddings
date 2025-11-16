@@ -9,9 +9,12 @@ Usage:
     python visualize_embeddings.py --cluster <cluster_id> [--limit <n>] [--2d]
     python visualize_embeddings.py --list-clusters
     python visualize_embeddings.py --interactive
-    python visualize_embeddings.py --radial-dendrogram [--namespace <namespace>] [--max-depth <n>] [--max-nodes <n>] [--save-path <path>]
-    python visualize_embeddings.py --traditional-dendrogram [--namespace <namespace>] [--max-depth <n>] [--max-nodes <n>] [--save-path <path>]
-    python visualize_embeddings.py --hierarchical [--namespace <namespace>] [--max-depth <n>] [--max-nodes <n>] [--save-path <path>]
+    python visualize_embeddings.py --radial-dendrogram [--namespace <namespace>] [--max-depth <n>] [--max-nodes <n>]
+                                                       [--save-path <path>]
+    python visualize_embeddings.py --traditional-dendrogram [--namespace <namespace>] [--max-depth <n>]
+                                                       [--max-nodes <n>] [--save-path <path>]
+    python visualize_embeddings.py --hierarchical [--namespace <namespace>] [--max-depth <n>] [--max-nodes <n>]
+                                                       [--save-path <path>]
     python visualize_embeddings.py --list-tree [--namespace <namespace>]
 """
 
@@ -25,7 +28,7 @@ from matplotlib.lines import Line2D
 from sklearn.decomposition import PCA
 from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.spatial.distance import pdist
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict
 import logging
 from collections import defaultdict
 
@@ -417,9 +420,9 @@ class EmbeddingVisualizer:
         return descendant_counts
 
     def plot_radial_dendrogram(self, namespace: str = 'enwiki_namespace_0',
-                             max_depth: Optional[int] = None,
-                             max_nodes: int = 100,
-                             save_path: Optional[str] = None):
+                               max_depth: Optional[int] = None,
+                               max_nodes: int = 100,
+                               save_path: Optional[str] = None):
         """Create a radial dendrogram visualization of the cluster tree."""
         # Get cluster tree nodes
         nodes = self.get_cluster_tree_nodes(namespace)
@@ -460,7 +463,7 @@ class EmbeddingVisualizer:
         colors = [cmap(i / max(1, max_depth_val - 1)) for i in range(max_depth_val)]
 
         # Sort nodes by depth for proper hierarchical ordering
-        sorted_nodes = sorted(nodes, key=lambda x: x['depth'])
+        # sorted_nodes = sorted(nodes, key=lambda x: x['depth'])
 
         # Plot each level using improved method
         for root in [node for node in nodes if node['parent_id'] is None]:
@@ -468,7 +471,7 @@ class EmbeddingVisualizer:
 
         # Customize the plot
         ax.set_title(f'Radial Dendrogram - {namespace}\n(Labeled by Descendant Children Count)',
-                    fontsize=14, pad=20)
+                     fontsize=14, pad=20)
         ax.set_ylim(0, 1)
         ax.grid(True, alpha=0.3)
         ax.set_axis_off()
@@ -476,8 +479,8 @@ class EmbeddingVisualizer:
         # Add legend
         depth_levels = sorted(set(node['depth'] for node in nodes))
         legend_elements = [Line2D([0], [0], marker='o', color='w',
-                                     markerfacecolor=colors[depth], markersize=10,
-                                     label=f'Depth {depth}')
+                                  markerfacecolor=colors[depth], markersize=10,
+                                  label=f'Depth {depth}')
                            for depth in depth_levels]
         ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.3, 1.0))
 
@@ -489,9 +492,9 @@ class EmbeddingVisualizer:
         plt.show()
 
     def plot_traditional_dendrogram(self, namespace: str = 'enwiki_namespace_0',
-                                   max_depth: Optional[int] = None,
-                                   max_nodes: int = 100,
-                                   save_path: Optional[str] = None):
+                                    max_depth: Optional[int] = None,
+                                    max_nodes: int = 100,
+                                    save_path: Optional[str] = None):
         """Create a traditional dendrogram visualization of the cluster tree."""
         # Get cluster tree nodes
         nodes = self.get_cluster_tree_nodes(namespace)
@@ -580,15 +583,15 @@ class EmbeddingVisualizer:
 
         # Plot dendrogram
         dendrogram(linkage_matrix,
-                  labels=labels,
-                  orientation='top',
-                  show_leaf_counts=True,
+                   labels=labels,
+                   orientation='top',
+                   show_leaf_counts=True,
                    leaf_rotation=90,
                    leaf_font_size=8,
                    show_contracted=False)
 
         plt.title(f'Traditional Dendrogram - {namespace}\n(Cluster Hierarchy by Depth Relationships)',
-                 fontsize=14, pad=20)
+                  fontsize=14, pad=20)
         plt.xlabel('Cluster Nodes', fontsize=12)
         plt.ylabel('Distance (based on depth relationships)', fontsize=12)
         plt.xticks(rotation=45, ha='right')
@@ -601,9 +604,9 @@ class EmbeddingVisualizer:
         plt.show()
 
     def plot_hierarchical_cluster(self, namespace: str = 'enwiki_namespace_0',
-                                max_depth: Optional[int] = None,
-                                max_nodes: int = 100,
-                                save_path: Optional[str] = None):
+                                  max_depth: Optional[int] = None,
+                                  max_nodes: int = 100,
+                                  save_path: Optional[str] = None):
         """Create a hierarchical cluster visualization using better layout algorithms."""
         # Get cluster tree nodes
         nodes = self.get_cluster_tree_nodes(namespace)
@@ -657,7 +660,7 @@ class EmbeddingVisualizer:
             ax4.set_title('Improved Radial Layout (Small Trees Only)')
         else:
             ax4.text(0.5, 0.5, 'Radial layout disabled\nfor large trees',
-                    ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+                     ha='center', va='center', transform=ax4.transAxes, fontsize=12)
             ax4.set_title('Radial Layout (Disabled)')
 
         plt.tight_layout()
@@ -689,15 +692,15 @@ class EmbeddingVisualizer:
                 parent_id = parent_map[node['node_id']]
                 parent_node = next(n for n in nodes if n['node_id'] == parent_id)
                 ax.plot([parent_node['depth'], node['depth']],
-                       [y_pos[parent_id], y_pos[node['node_id']]], 'b-', alpha=0.6)
+                        [y_pos[parent_id], y_pos[node['node_id']]], 'b-', alpha=0.6)
 
         # Draw nodes
         for node in sorted_nodes:
             ax.scatter(node['depth'], y_pos[node['node_id']],
-                      c=node['depth'], cmap='viridis', s=50, alpha=0.8)
+                       c=node['depth'], cmap='viridis', s=50, alpha=0.8)
             ax.annotate(f"N{node['node_id']}",
-                       (node['depth'], y_pos[node['node_id']]),
-                       xytext=(5, 0), textcoords='offset points', fontsize=8)
+                        (node['depth'], y_pos[node['node_id']]),
+                        xytext=(5, 0), textcoords='offset points', fontsize=8)
 
         ax.set_xlabel('Depth')
         ax.set_ylabel('Node Position')
@@ -722,13 +725,14 @@ class EmbeddingVisualizer:
                 for child_id in children_map.get(node['node_id'], []):
                     if child_id in [n['node_id'] for n in nodes]:
                         child_node = next(n for n in nodes if n['node_id'] == child_id)
-                        child_y = np.linspace(0, 10, len([n for n in nodes if n['depth'] == child_node['depth']]) + 2)[1:-1]
+                        child_y = np.linspace(0, 10, len([n for n in nodes
+                                                          if n['depth'] == child_node['depth']]) + 2)[1:-1]
                         child_idx = [n['node_id'] for n in nodes if n['depth'] == child_node['depth']].index(child_id)
                         ax.plot([x, child_node['depth']], [y, child_y[child_idx]], 'b-', alpha=0.6)
 
                 # Label
                 ax.annotate(f"N{node['node_id']}", (x, y), xytext=(5, 5),
-                           textcoords='offset points', fontsize=8, ha='left')
+                            textcoords='offset points', fontsize=8, ha='left')
 
         ax.set_xlabel('Depth Level')
         ax.set_ylabel('Node Position')
@@ -774,7 +778,7 @@ class EmbeddingVisualizer:
                 x, y = node_positions[node['node_id']]
                 ax.scatter(x, y, c=node['depth'], cmap='viridis', s=80, alpha=0.8, edgecolors='black')
                 ax.annotate(f"N{node['node_id']}", (x, y), xytext=(5, 5),
-                           textcoords='offset points', fontsize=8, ha='left')
+                            textcoords='offset points', fontsize=8, ha='left')
 
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position (Depth)')
@@ -821,7 +825,7 @@ class EmbeddingVisualizer:
                 # Draw nodes
                 ax.scatter(x, y, c=node['depth'], cmap='viridis', s=80, alpha=0.8, edgecolors='black')
                 ax.annotate(f"N{node['node_id']}", (x, y), xytext=(5, 5),
-                           textcoords='offset points', fontsize=8, ha='left')
+                            textcoords='offset points', fontsize=8, ha='left')
 
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.3)
@@ -830,7 +834,7 @@ class EmbeddingVisualizer:
         """Recursively plot a single node and its children in radial layout."""
         node_id = node['node_id']
         depth = node['depth']
-        doc_count = node['doc_count']
+        # doc_count = node['doc_count']
         descendant_count = descendant_counts.get(node_id, 0)
 
         # Calculate radius based on depth
@@ -868,10 +872,10 @@ class EmbeddingVisualizer:
 
         # Draw connecting line to parent (for non-root nodes)
         if node['parent_id'] is not None:
-            parent_radius = 0.1 + ((depth - 1) * 0.15)
+            # parent_radius = 0.1 + ((depth - 1) * 0.15)
             ax.plot([0, radius * np.cos(label_angle)],
-                   [0, radius * np.sin(label_angle)],
-                   'k-', alpha=0.3, linewidth=0.5)
+                    [0, radius * np.sin(label_angle)],
+                    'k-', alpha=0.3, linewidth=0.5)
 
         # Recursively plot children
         if children:
@@ -879,7 +883,7 @@ class EmbeddingVisualizer:
             for child in children:
                 child_angle_span = angle_span / len(children)
                 self._plot_radial_node(ax, child, children_map, descendant_counts,
-                                      colors, child_angle_offset)
+                                       colors, child_angle_offset)
                 child_angle_offset += child_angle_span
 
     def list_cluster_tree_info(self, namespace: str = 'enwiki_namespace_0'):
@@ -902,14 +906,14 @@ class EmbeddingVisualizer:
         print(f"Root nodes: {len(root_nodes)}")
         print(f"Leaf nodes: {len(leaf_nodes)}")
         print(f"Maximum depth: {max_depth}")
-        print(f"Depth distribution:")
+        print("Depth distribution:")
 
         for depth in range(max_depth + 1):
             count = len([node for node in nodes if node['depth'] == depth])
             print(f"  Depth {depth}: {count} nodes")
 
         # Show root nodes
-        print(f"\nRoot nodes:")
+        print("\nRoot nodes:")
         for root in root_nodes:
             descendant_count = self.calculate_descendant_counts([root]).get(root['node_id'], 0)
             print(f"  Node {root['node_id']}: {root['doc_count']} documents, {descendant_count} descendants")
@@ -1036,8 +1040,10 @@ class EmbeddingVisualizer:
                 if children_doc_count > 0 and node['doc_count'] > 0:
                     ratio = children_doc_count / node['doc_count']
                     if ratio > 1.1:  # Children have significantly more documents than parent
-                        doc_count_issues.append((node['node_id'], node['doc_count'],
-                                              f"Children have {children_doc_count} docs vs parent {node['doc_count']} (ratio: {ratio:.2f})"))
+                        doc_count_issues.append((node['node_id'],
+                                                 node['doc_count'],
+                                                 f"Children have {children_doc_count} docs vs "
+                                                 f"parent {node['doc_count']} (ratio: {ratio:.2f})"))
 
         if doc_count_issues:
             print(f"   Found {len(doc_count_issues)} document count issues:")
@@ -1158,7 +1164,8 @@ class EmbeddingVisualizer:
         if depth_violations:
             print(f"   Found {len(depth_violations)} depth violations:")
             for child_id, child_depth, parent_id, parent_depth in depth_violations[:10]:
-                print(f"     Node {child_id} (depth {child_depth}) should have depth > parent {parent_id} (depth {parent_depth})")
+                print(f"     Node {child_id} (depth {child_depth}) should have "
+                      f"depth > parent {parent_id} (depth {parent_depth})")
             issues_found.append("Depth violations")
         else:
             print("   All depths are consistent with parent-child relationships")
@@ -1170,8 +1177,8 @@ class EmbeddingVisualizer:
         for node in nodes:
             if node['node_id'] in children_map:
                 children_total = sum(node_id_to_node[child_id]['doc_count']
-                                   for child_id in children_map[node['node_id']]
-                                   if child_id in node_id_to_node)
+                                     for child_id in children_map[node['node_id']]
+                                     if child_id in node_id_to_node)
 
                 if node['doc_count'] is not None and children_total > 0:
                     if children_total > node['doc_count'] * 1.5:  # Children significantly exceed parent
@@ -1212,7 +1219,7 @@ class EmbeddingVisualizer:
             print("   Tree structure is valid and connected")
 
         # Final summary
-        print(f"\n=== Integrity Validation Summary ===")
+        print("\n=== Integrity Validation Summary ===")
         if issues_found:
             print(f"Found {len(issues_found)} types of issues:")
             for issue in issues_found:
@@ -1236,8 +1243,10 @@ def main():
     parser.add_argument('--stats', action='store_true', help='Show cluster statistics')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
     parser.add_argument('--radial-dendrogram', action='store_true', help='Create radial dendrogram visualization')
-    parser.add_argument('--traditional-dendrogram', action='store_true', help='Create traditional dendrogram visualization')
-    parser.add_argument('--hierarchical', action='store_true', help='Create hierarchical cluster visualization with multiple layouts')
+    parser.add_argument('--traditional-dendrogram', action='store_true',
+                        help='Create traditional dendrogram visualization')
+    parser.add_argument('--hierarchical', action='store_true',
+                        help='Create hierarchical cluster visualization with multiple layouts')
     parser.add_argument('--analyze-tree', action='store_true', help='Analyze cluster tree data quality and issues')
     parser.add_argument('--validate-tree', action='store_true', help='Validate cluster tree integrity')
     parser.add_argument('--namespace', default='enwiki_namespace_0', help='Namespace to filter by')
@@ -1253,8 +1262,10 @@ def main():
 
     try:
         logger.debug(f"Arguments received: cluster={args.cluster}, 2d={args.two_d}, limit={args.limit}, "
-                    f"radial_dendrogram={args.radial_dendrogram}, traditional_dendrogram={args.traditional_dendrogram}, "
-                    f"analyze_tree={args.analyze_tree}, validate_tree={args.validate_tree}, namespace={args.namespace}")
+                     f"radial_dendrogram={args.radial_dendrogram}, "
+                     f"traditional_dendrogram={args.traditional_dendrogram}, "
+                     f"analyze_tree={args.analyze_tree}, "
+                     f"validate_tree={args.validate_tree}, namespace={args.namespace}")
 
         if args.list_clusters:
             logger.debug("Executing list_clusters command")

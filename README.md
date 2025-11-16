@@ -1,7 +1,7 @@
 # Wikipedia Embeddings Generator
 
 This project downloads and extracts Wikipedia article page titles and abstracts from [Wikimedia Enterprise](https://enterprise.wikimedia.com/),
-then computes embeddings on them. 
+then computes embeddings on them.
 
 ## Project functions and structure
 
@@ -15,11 +15,11 @@ It implements a few functions:
 
 All of the metadata and computed embeddings are stored in a Sqlite 3 database called `chunk_log.db`.
 
-A slightly modified copy of the Wikimedia Enterprise Python SDK is in the `wme_sdk` directory. Their code has its own license, in the `wme_sdk/LICENSE` file.  
+A slightly modified copy of the Wikimedia Enterprise Python SDK is in the `wme_sdk` directory. Their code has its own license, in the `wme_sdk/LICENSE` file.
 
 The remainder of the project is licensed by the file in `./LICENSE`.
 
-The main file is `command.py`; see below for use. 
+The main file is `command.py`; see below for use.
 
 ## Getting started
 
@@ -45,7 +45,7 @@ uv sync
 The command engine can accept commands as arguments on the command line or interactively. To run interactively:
 
 ```bash
-$ python -m command       
+$ python -m command
 Welcome to wp-embeddings command interpreter!
 Type 'help' for available commands or 'quit' to exit.
 
@@ -88,18 +88,18 @@ python -m command refresh --namespace enwiki_namespace_0
 
 ## Command notes and tips
 
-Most commands that can operate on more than one item accept a `--limit n` parameter to limit how many operations they perform. 
-You can use this capability to manage the work done at any given time.  
+Most commands that can operate on more than one item accept a `--limit n` parameter to limit how many operations they perform.
+You can use this capability to manage the work done at any given time.
 
-The `download`, `unpack`, and `embed` commands will all try to avoid repeating work that's already been completed, so you can run 
-them repeatedly with `--limit` to incrementally do the required work over an entire namespace. 
+The `download`, `unpack`, and `embed` commands will all try to avoid repeating work that's already been completed, so you can run
+them repeatedly with `--limit` to incrementally do the required work over an entire namespace.
 
 ## Operational notes
 
 * The Wikimedia Enterprise API client expects a `.env` file containing valid credentials in the following keys: `WME_USERNAME`, `WME_PASSWORD`.
 * Downloaded archive files are stored in `./downloaded/{namespace}` and named like `{chunk_name}.tar.gz`.
-* This code assumes that each archive contains exactly one chunk file in ndjson format. 
-* Extracted archives are stored in `./extracted/{namespace}` and are deleted after unpacking and parsing completes (because they are about 2GB each!) 
+* This code assumes that each archive contains exactly one chunk file in ndjson format.
+* Extracted archives are stored in `./extracted/{namespace}` and are deleted after unpacking and parsing completes (because they are about 2GB each!)
 * Both download and extract operations will overwrite files if the files exist already.
 * Make sure you have enough disk space. For reference, the complete English Wikipedia namespace 0 archive (article pages) takes about 133G in .tar.gz form (as measured in October 2025).
 
@@ -121,4 +121,12 @@ EMBEDDING_MODEL_NAME=jina-embeddings-v4-text-matching-GGUF
 
 
 Embeddings are stored in the sqlite3 database after computation. Though `chromadb` is a project dependency, I am not using
-ChromaDB to store the embeddings. 
+ChromaDB to store the embeddings.
+
+
+## Building & etc
+
+Run flake8 for lint:
+
+    uv run flake8 .
+
