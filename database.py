@@ -1263,9 +1263,9 @@ def get_cluster_node_first_pass_topic(sqlconn: sqlite3.Connection, namespace: st
         raise
 
 
-def get_cluster_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> list[tuple[int, int, str]]:
+def get_cluster_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> list[tuple[int, int, str, int]]:
     sql = """
-        SELECT parent_id, node_id, first_label
+        SELECT parent_id, node_id, first_label, depth
         FROM cluster_tree
         WHERE namespace = ?
         ORDER BY parent_id ASC
@@ -1274,7 +1274,7 @@ def get_cluster_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> lis
         cursor = sqlconn.cursor()
         cursor.execute(sql, (namespace, ))
         rows = cursor.fetchall()
-        return [(row[0], row[1], row[2], ) for row in rows]
+        return [(row[0], row[1], row[2], row[3], ) for row in rows]
 
     except sqlite3.Error as e:
         try:
