@@ -34,6 +34,9 @@ SUMMARIZING_MODEL_API_URL_KEY = "SUMMARIZING_MODEL_API_URL"
 SUMMARIZING_MODEL_API_KEY_KEY = "SUMMARIZING_MODEL_API_KEY"
 DEFAULT_MODEL_NAME = "gpt-oss-20b"
 
+APP_TITLE = "wp-embeddings"
+APP_URL = "TODO: put Github link here"
+
 namespace_to_system_prompt_dict: Dict[str, str] = dict()
 
 
@@ -109,7 +112,12 @@ class TopicDiscovery:
                         "cache_prompt": False,
                         "n_keep": 0,
                         # "temperature": 0.0,
-                    }
+                    },
+                    extra_headers={
+                        # Headers for OpenRouter.ai
+                        # "HTTP-Referer": APP_URL,
+                        "X-Title": APP_TITLE,
+                    },
                 )
                 return completion.choices[0].message.content
 
