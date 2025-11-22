@@ -3,20 +3,16 @@
 This project downloads and extracts Wikipedia article page titles and abstracts from [Wikimedia Enterprise](https://enterprise.wikimedia.com/),
 then computes embeddings on them and recursively clusters the embeddings, for the purpose of visualizing all the knowledge in Wikipedia.
 
-The goal is to have visualizations for multiple languages – as many as can be supported by the ML models I've selected for this project:
+The goal is to have visualizations for multiple languages – as many as can be supported by the ML models I've selected for this project:
 
 * [jinaai/jina-embeddings-v4-text-matching-GGUF](https://huggingface.co/jinaai/jina-embeddings-v4-text-matching-GGUF) for embeddings
 * [ggml-org/gpt-oss-20b-GGUF](https://huggingface.co/ggml-org/gpt-oss-20b-GGUF) for topic discovery
 
-Author: [Tajh Taylor](https://github.com/tajhlande)
-
 ## Project functions and structure
-
-This project is managed with [uv](https://docs.astral.sh/uv/), the awesome Python package manager from Astral.
 
 The primary module for the project is `command.py`, and it can be invoked interactively:
 
-```bash
+```
 $ python -m command
 Welcome to wp-embeddings command interpreter!
 Type 'help' for available commands or 'quit' to exit.
@@ -26,7 +22,7 @@ Type 'help' for available commands or 'quit' to exit.
 
 or with command parameters:
 
-```bash
+```
 $ python -m command help
 Available commands:
   refresh - Refresh chunk data for a namespace
@@ -50,20 +46,20 @@ Available commands are:
 
 * **refresh** - Fetch metadata from the Wikimedia Enterprise API about snapshots available for download
 * **download** – Download snapshot chunks
-* **unpack** – Unpack and extract article page titles and abstracts from the snapshot chunks
-* **embed** – Compute embeddings on the page titles and abstracts
-* **reduce** – Reduce the dimensionality of the embeddings
-* **cluster** – Do a single-pass cluster of the reduced vectors with k-means
-* **recursive-cluster** – Run recursive clustering with k-means to build a tree of clusters
-* **project** – Project the single-pass vectors into 3-space
-* **topics** – Use an LLM model to discover topics for clusters according to their page content
-* **status** – Show current data status
-* **help** – Show help information
+* **unpack** – Unpack and extract article page titles and abstracts from the snapshot chunks
+* **embed** – Compute embeddings on the page titles and abstracts
+* **reduce** – Reduce the dimensionality of the embeddings
+* **cluster** – Do a single-pass cluster of the reduced vectors with k-means
+* **recursive-cluster** – Run recursive clustering with k-means to build a tree of clusters
+* **project** – Project the single-pass vectors into 3-space
+* **topics** – Use an LLM model to discover topics for clusters according to their page content
+* **status** – Show current data status
+* **help** – Show help information
 
 Most operations require a `--namespace` argument that is expected to be a Wikipedia namespace,
 as they are named by the Wikimedia Enterprise API, for example: `enwiki_namespace_0`.
 
-All of the page content, metadata, computed embeddings, and cluster information
+All the page content, metadata, computed embeddings, and cluster information
 are stored in a Sqlite 3 database named after the namespace,
 for example `enwiki_namespace_0.db`.
 
@@ -74,6 +70,8 @@ The remainder of the project is licensed by the file in [LICENSE](LICENSE).
 
 
 ## Getting started
+
+This project is managed with [uv](https://docs.astral.sh/uv/), the awesome Python package manager from Astral.
 
 First, install `uv` if you haven't already:
 
@@ -94,9 +92,8 @@ Fetch the project dependencies:
 uv sync
 ```
 
-The command engine can accept commands as arguments on the command line or interactively. To run interactively:
-
-```bash
+Run the command engine interactively:
+```
 $ python -m command
 Welcome to wp-embeddings command interpreter!
 Type 'help' for available commands or 'quit' to exit.
@@ -116,23 +113,8 @@ Use 'help <command>' for more information about a specific command.
 Goodbye!
 ```
 
-or on the command line:
-
-```bash
-$ python -m command status
-INFO:database:Establishing SQLite connection
-System Status:
-Chunks: 417 total, 6 downloaded, 1 extracted
-Pages: 71834 total, 19822 with embeddings
-Chunk Completion: 0 complete, 417 incomplete
-Page Completion: 52426 pending embeddings, 19822 complete, 71834 total pages.
-
-Namespace breakdown:
-  enwiki_namespace_0: 417 chunks, 6 downloaded
-```
-
-
-For required and optional parameters to a command, precede them with a double-dash:
+For required and optional parameters to a command, precede them with a double-dash,
+whether on the command line or within the command interpreter:
 
 ```bash
 python -m command refresh --namespace enwiki_namespace_0
@@ -167,7 +149,7 @@ A sample file can be found in [env-example](env-example).
 Embeddings are computed with the `jina-embeddings-v4-text-matching-GGUF` embedding model by default.
 Model config is provided through environment variables, and the following parameters are needed:
 
-- `EMBEDDING_MODEL_API_URL` – Required: An OpenAI compatible endpoint for model access
+- `EMBEDDING_MODEL_API_URL` – Required: An OpenAI compatible endpoint for model access
 - `EMBEDDING_MODEL_API_KEY` - Required: The key for accessing that API
 - `EMBEDDING_MODEL_NAME` - Optional: The name of the model in the API. Defaults to `jina-embeddings-v4-text-matching-GGUF` if not provided
 
@@ -188,21 +170,19 @@ and return the vector. I may refactor this dependency out later. It was very con
 Topic discovery is computed with the `gpt-oss-20b` model by default.
 Model config is provided through environment variables, and the following parameters are needed:
 
-- `SUMMARIZING_MODEL_API_URL` – Required: An OpenAI compatible endpoint for model access
+- `SUMMARIZING_MODEL_API_URL` – Required: An OpenAI compatible endpoint for model access
 - `SUMMARIZING_MODEL_API_KEY` - Required: The key for accessing that API
 - `SUMMARIZING_MODEL_NAME` - Optional: The name of the model in the API. Defaults to `gpt-oss-20b` if not provided
-
-Discovered topics are stored on the
 
 ## Data structure
 
 The sqlite3 database has the following tables:
 
-* **chunk_log** – Name, download path, and other metadata about chunks of the Wikipedia archive that can be or have been downloaded
-* **page_log** – Page ID, title, abstract, and other metadata
-* **page_vector** – Embedding and other computed vectors, plus cluster ID assignments for pages.
-* **cluster_info** – Cluster node info from the `cluster` command
-* **cluster_tree** – Cluster node info from the `recursive-cluster` command
+* **chunk_log** – Name, download path, and other metadata about chunks of the Wikipedia archive that can be or have been downloaded
+* **page_log** – Page ID, title, abstract, and other metadata
+* **page_vector** – Embedding and other computed vectors, plus cluster ID assignments for pages.
+* **cluster_info** – Cluster node info from the `cluster` command
+* **cluster_tree** – Cluster node info from the `recursive-cluster` command
 
 ## Visualization
 
@@ -218,9 +198,9 @@ which produces `cluster_tree.html`, which you can load in the browser to view a 
 
 ## CI
 
-This project uses flake8 for linting:
+This project uses [ruff](https://github.com/astral-sh/ruff) for linting (also from Astral Labs):
 
 ```bash
-uv run flake8 .
+uvx ruff check
 ```
 
