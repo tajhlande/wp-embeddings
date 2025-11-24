@@ -75,7 +75,7 @@ class TransformersPipelineClient(ChatModelCaller):
     def __init__(self, model_name: str = DEFAULT_MODEL_NAME):
         self.model_name = model_name
 
-        device = infer_device()
+        # device = infer_device()
 
         # self._pipe = pipeline("text-generation",
         #                       model=self.model_name,
@@ -85,7 +85,7 @@ class TransformersPipelineClient(ChatModelCaller):
             "text-generation",
             model=self.model_name,
             model_kwargs={"dtype": torch.bfloat16},
-            device_map="auto",
+            device_map="cuda:0",
         )
     @classmethod
     def get_from_env(cls):
