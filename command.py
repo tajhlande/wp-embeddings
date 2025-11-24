@@ -109,7 +109,7 @@ OPTIONAL_LIMIT_ARGUMENT = Argument(
     name="limit", type="integer", required=False, description="Maximum number of clusters to process across all passes"
 )
 REQUIRED_MODEL_SOURCE_ARGUMENT = Argument(
-    name="model-source", type="string", required=True, description="Where models run: 'transformers' or 'openai'."
+    name="model_source", type="string", required=True, description="Where models run: 'transformers' or 'openai'."
 )
 
 CHECK = "✓"
