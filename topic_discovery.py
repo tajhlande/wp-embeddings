@@ -1,13 +1,15 @@
+import concurrent.futures
 import logging
 import os
-import concurrent.futures
-
-from random import random
 import time
+from abc import ABC
+from random import random
 from typing import Dict, Iterable, Optional
-from dotenv import load_dotenv
 
+import torch
+from dotenv import load_dotenv
 from openai import OpenAI, InternalServerError
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, infer_device
 
 from classes import ClusterNodeTopics, PageContent
 from languages import get_language_for_namespace
@@ -33,7 +35,7 @@ TOPIC_GENERATION_SYSTEM_PROMPT = " ".join("""
 SUMMARIZING_MODEL_NAME_KEY = "SUMMARIZING_MODEL_NAME"
 SUMMARIZING_MODEL_API_URL_KEY = "SUMMARIZING_MODEL_API_URL"
 SUMMARIZING_MODEL_API_KEY_KEY = "SUMMARIZING_MODEL_API_KEY"
-DEFAULT_MODEL_NAME = "gpt-oss-20b"
+DEFAULT_MODEL_NAME = "openai/gpt-oss-20b"
 
 APP_TITLE = "wp-embeddings"
 APP_URL = "http://localhost:8080"
@@ -53,26 +55,119 @@ def get_system_prompt_for_namespace(namespace: str) -> str:
     return prompt
 
 
-class TopicDiscovery:
+class ChatModelCaller(ABC):
+    """
+    Abstract class for ways of invoking a model with text system prompt, user prompt, and
+    getting a text response.
+    """
 
-    _openai_client: OpenAI
+    def chat(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        pass
+
+
+class TransformersPipelineClient(ChatModelCaller):
+    """
+    A model calling implementation that uses pipeline
+    from the local transformers library.
+    """
     model_name: str
-    accumulated_errors: int = 0
-    _max_workers: int = 8
+
+    def __init__(self, model_name: str = DEFAULT_MODEL_NAME):
+        self.model_name = model_name
+
+        device = infer_device()
+
+        # self._pipe = pipeline("text-generation",
+        #                       model=self.model_name,
+        #                       device=device,
+        #                       max_length=100)
+        self._pipeline = pipeline(
+            "text-generation",
+            model=self.model_name,
+            model_kwargs={"torch_dtype": torch.bfloat16},
+            device_map="auto",
+        )
+    @classmethod
+    def get_from_env(cls):
+        load_dotenv()
+        model_name = os.environ.get(SUMMARIZING_MODEL_NAME_KEY, DEFAULT_MODEL_NAME)
+
+        return cls(
+            model_name=model_name
+        )
+
+    def chat(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        messages=[
+            {"role": "developer", "content": system_prompt, },
+            {"role": "user", "content": user_prompt, },
+        ]
+
+        return self._pipe(messages)
+
+
+class TransformersAutoModelClient(ChatModelCaller):
+    """
+    A model calling implementation that uses
+    AutoTokenizer and AutoModelForCausalLM
+    from the local transformers library.
+    """
+    model_name: str
+
+    def __init__(self, model_name: str = DEFAULT_MODEL_NAME):
+
+        # Load model directly
+        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
+
+    @classmethod
+    def get_from_env(cls):
+        load_dotenv()
+        model_name = os.environ.get(SUMMARIZING_MODEL_NAME_KEY, DEFAULT_MODEL_NAME)
+
+        return cls(
+            model_name=model_name
+        )
+
+    def chat(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        messages=[
+            {"role": "developer", "content": system_prompt, },
+            {"role": "user", "content": user_prompt, },
+        ],
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            temperature=1.0,
+            top_p=1.0,
+        ).to(self.model.device)
+
+        outputs = self.model.generate(**inputs, max_new_tokens=100)
+        response: str = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:])
+        return response
+
+
+class OpenAIAPIClient(ChatModelCaller):
+    """
+    A model calling implementation that invokes an OpenAI compatible endpoint.
+    """
+    _wrapped_client: OpenAI
+    model_name: str
 
     def __init__(
-        self,
-        ai_server_base_url: str,
-        ai_server_key: Optional[str],
-        model_name: str = DEFAULT_MODEL_NAME,
+            self,
+            ai_server_base_url: str,
+            ai_server_key: Optional[str],
+            model_name: str = DEFAULT_MODEL_NAME,
     ):
         logger.info("Opening connection to OpenAI compatible server at %s", ai_server_base_url)
-        self._openai_client = OpenAI(
-           api_key=ai_server_key,
-           base_url=ai_server_base_url
+        self._wrapped_client = OpenAI(
+            api_key=ai_server_key,
+            base_url=ai_server_base_url
         )
         self.model_name = model_name
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers)
 
     @classmethod
     def get_from_env(cls):
@@ -88,11 +183,54 @@ class TopicDiscovery:
             ai_server_base_url=api_url,
             ai_server_key=api_key,
             model_name=model_name
-            )
+        )
 
-    def _call_openai_completions_endpoint(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def chat(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        completion = self._wrapped_client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "developer", "content": system_prompt, },
+                {"role": "user", "content": user_prompt, },
+            ],
+            extra_body={
+                # TODO make enabling these parmams configured by environment variable
+                # llama.cpp-specific slot parameters to deal with "500: context shift is disabled" errors
+                "cache_prompt": False,
+                "n_keep": 0,
+                # OpenRouter.ai specific parameters
+                "provider": {
+                    # "order": ["novita/bf16", "ncompass", "gmicloud/fp4", "deepinfra/fp4", ]  # gpt-oss-120b
+                    # TODO refactor this out into environment variables
+                    "order": ["novita", "deepinfra", "wandb", ],  # gpt-oss-20b preferences
+                },
+            },
+            extra_headers={
+                # Headers for OpenRouter.ai
+                # "HTTP-Referer": APP_URL,
+                "X-Title": APP_TITLE,
+            },
+            temperature=1.0,
+            top_p=1.0,
+        )
+        return completion.choices[0].message.content
+
+
+
+class TopicDiscovery:
+
+    chat_model_caller: ChatModelCaller
+    model_name: str
+    accumulated_errors: int = 0
+    _max_workers: int = 8
+
+    def __init__(self, chat_model_caller: ChatModelCaller):
+        self.chat_model_caller = chat_model_caller
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers)
+
+
+    def _call_model(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         """
-        Call the openai client and invoke the completions endpoint.
+        Call the transformers or openai client and invoke the completions endpoint.
         Do a few retries with truncated user prompt if 500-599 errors are caught
         """
         attempts = 0
@@ -102,32 +240,9 @@ class TopicDiscovery:
         while attempts < max_attempts:
             try:
                 attempts += 1
-                completion = self._openai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "developer", "content": system_prompt, },
-                        {"role": "user", "content": user_prompt, },
-                    ],
-                    extra_body={
-                        # llama.cpp-specific slot parameters to deal with "500: context shift is disabled" errors
-                        "cache_prompt": False,
-                        "n_keep": 0,
-                        # OpenRouter.ai specific parameters
-                        "provider": {
-                            # "order": ["novita/bf16", "ncompass", "gmicloud/fp4", "deepinfra/fp4", ]  # gpt-oss-120b
-                            "order": ["novita", "deepinfra", "wandb", ],  # gpt-oss-20b preferences
-                        },
-                    },
-                    extra_headers={
-                        # Headers for OpenRouter.ai
-                        # "HTTP-Referer": APP_URL,
-                        "X-Title": APP_TITLE,
-                    },
-                    temperature=1.0,
-                    top_p=1.0,
-                )
-                return completion.choices[0].message.content
+                return self.chat_model_caller.chat(system_prompt=system_prompt, user_prompt=user_prompt)
 
+            # retries on certain types of errors from the OpenAI API endpoint
             except InternalServerError as e:
                 self.accumulated_errors += 1
                 previous_error = e
@@ -173,7 +288,7 @@ class TopicDiscovery:
 
         logger.debug("Prompt: %s", prompt)
 
-        node.first_label = self._call_openai_completions_endpoint(get_system_prompt_for_namespace(namespace), prompt)
+        node.first_label = self._call_model(get_system_prompt_for_namespace(namespace), prompt)
         node.first_label = node.first_label.strip() if node.first_label else None
 
     def adversely_summarize_page_topics(self,
@@ -206,7 +321,7 @@ class TopicDiscovery:
 
         logger.debug("Prompt: %s", prompt)
 
-        node.final_label = self._call_openai_completions_endpoint(get_system_prompt_for_namespace(namespace), prompt)
+        node.final_label = self._call_model(get_system_prompt_for_namespace(namespace), prompt)
         node.final_label = node.final_label.strip() if node.final_label else None
 
     def naively_summarize_cluster_topics(self, namespace: str,
@@ -229,7 +344,7 @@ class TopicDiscovery:
 
         logger.debug("Prompt: %s", prompt)
 
-        node.first_label = self._call_openai_completions_endpoint(get_system_prompt_for_namespace(namespace), prompt)
+        node.first_label = self._call_model(get_system_prompt_for_namespace(namespace), prompt)
         node.first_label = node.first_label.strip() if node.first_label else None
 
     def adversely_summarize_cluster_topics(self,
@@ -260,7 +375,7 @@ class TopicDiscovery:
 
         logger.debug("Prompt: %s", prompt)
 
-        node.final_label = self._call_openai_completions_endpoint(get_system_prompt_for_namespace(namespace), prompt)
+        node.final_label = self._call_model(get_system_prompt_for_namespace(namespace), prompt)
         node.final_label = node.final_label.strip() if node.final_label else None
 
     # -----------------------------------------------------------------------

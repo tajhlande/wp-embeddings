@@ -41,7 +41,7 @@ from index_pages import (
 )
 from languages import get_language_for_namespace
 from progress_utils import ProgressTracker
-from topic_discovery import TopicDiscovery
+from topic_discovery import TopicDiscovery, TransformersPipelineClient, OpenAIAPIClient
 from transform import run_kmeans, run_pca, run_umap_per_cluster, run_recursive_clustering
 
 logging.basicConfig(
@@ -107,6 +107,9 @@ REQUIRED_MODE_ARGUMENT = Argument(
 )
 OPTIONAL_LIMIT_ARGUMENT = Argument(
     name="limit", type="integer", required=False, description="Maximum number of clusters to process across all passes"
+)
+REQUIRED_MODEL_SOURCE_ARGUMENT = Argument(
+    name="model-source", type="string", required=True, description="Where models run: 'transformers' or 'openai'."
 )
 
 CHECK = "✓"
@@ -1053,6 +1056,7 @@ class TopicsCommand(Command):
                 REQUIRED_MODE_ARGUMENT,
                 OPTIONAL_LIMIT_ARGUMENT,
                 OPTIONAL_BATCH_SIZE_ARGUMENT,
+                REQUIRED_MODEL_SOURCE_ARGUMENT
             ]
         )
 
@@ -1062,10 +1066,15 @@ class TopicsCommand(Command):
             batch_size = args.get(OPTIONAL_BATCH_SIZE_ARGUMENT.name, OPTIONAL_BATCH_SIZE_ARGUMENT.default)
             mode = args[REQUIRED_MODE_ARGUMENT.name]
             limit = args.get(OPTIONAL_LIMIT_ARGUMENT.name)
+            model_source = args[REQUIRED_MODEL_SOURCE_ARGUMENT.name]
 
             # Validate mode argument
             if mode not in ["refresh", "resume"]:
                 return Result.FAILURE, f"{X} Invalid mode: {mode}. Must be 'refresh' or 'resume'"
+
+            # Validate model source argument
+            if model_source not in ["transformers", "openai"]:
+                return Result.FAILURE, f"{X} Invalid model-source: {model_source}. Must be 'transformers' or 'openai'."
 
             if limit:
                 logger.debug("Limit: %d clusters", limit)
@@ -1073,7 +1082,12 @@ class TopicsCommand(Command):
                 logger.debug("No limit specified")
 
             sqlconn = get_sql_conn(namespace)
-            topic_discovery = TopicDiscovery.get_from_env()
+
+            if model_source == "transformers":
+                chat_model_caller = TransformersPipelineClient.get_from_env()
+            else:
+                chat_model_caller = OpenAIAPIClient.get_from_env()
+            topic_discovery = TopicDiscovery(chat_model_caller=chat_model_caller)
             topic_discovery.accumulated_errors = 0
 
             if mode == "refresh":
