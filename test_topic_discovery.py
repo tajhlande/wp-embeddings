@@ -1,6 +1,6 @@
 import logging
 
-from classes import Page
+from classes import ClusterNodeTopics, Page, PageContent
 from database import (
     get_cluster_node_first_pass_topic,
     get_cluster_parent_id,
@@ -32,14 +32,18 @@ def test_topic_summary_llm_call():
     """
     #        AND page_vector.cluster_node_id = 10
 
-    sqlconn = get_sql_conn("enwiki_namespace_0")
+    namespace = "enwiki_namespace_0"
+    sqlconn = get_sql_conn(namespace)
     cursor = sqlconn.cursor()
     cursor.execute(page_list_sql)
     rows = cursor.fetchall()
     pages = [_row_to_dataclass(row, Page) for row in rows]
 
     logger.info("Summarizing topics for %d pages", len(pages))
-    topic = topic_discovery.summarize_page_topics(page_list=pages)
+    cnt = ClusterNodeTopics(node_id=3, depth=3, parent_id=2,
+                            first_label="first", final_label="final", is_leaf=True)
+    page_topics = [PageContent(page_id=page.page_id, title=page.title, abstract=page.abstract or "") for page in pages]
+    topic = topic_discovery.naively_summarize_page_topics(namespace, node=cnt, pages=page_topics)
 
     logger.info("Summarized topic: %s", topic)
 
@@ -76,7 +80,15 @@ def test_adverse_topic_summary():
 
     topic_discovery = TopicDiscovery.get_from_env()
 
-    final_topic = topic_discovery.adversely_summarize_page_topics(page_list, neighboring_topic_list)
+    cnt = ClusterNodeTopics(node_id=3, depth=3, parent_id=2,
+                            first_label="first", final_label="final", is_leaf=True)
+    page_topics = [PageContent(page_id=page.page_id, title=page.title, abstract=page.abstract or "") for page in page_list]
+    n_id = 5
+    neighbor_nodes = [ClusterNodeTopics(node_id=(n_id := n_id + 1), depth=3, parent_id=2,
+                                        first_label="first", final_label="final", is_leaf=True
+                                        ) for topic in neighboring_topic_list]
+    final_topic = topic_discovery.adversely_summarize_page_topics(namespace, node=cnt, pages=page_topics,
+                                                                  siblings=neighbor_nodes)
     logger.debug(f"Final pass topic: {final_topic}")
 
 

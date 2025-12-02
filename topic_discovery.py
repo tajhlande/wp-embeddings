@@ -36,7 +36,7 @@ SUMMARIZING_MODEL_API_KEY_KEY = "SUMMARIZING_MODEL_API_KEY"
 DEFAULT_MODEL_NAME = "gpt-oss-20b"
 
 APP_TITLE = "wp-embeddings"
-APP_URL = "http://localhost:8080"
+# APP_URL = "http://localhost:8080"
 
 namespace_to_system_prompt_dict: Dict[str, str] = dict()
 

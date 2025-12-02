@@ -28,8 +28,6 @@ from classes import ClusterTreeNode
 from database import (
     get_clusters_needing_projection,
     get_reduced_vectors_for_cluster,
-    three_d_vector_to_text,
-    update_cluster_centroid,
     update_cluster_tree_assignments,
     update_reduced_vectors_in_batch,
     update_three_d_vector_for_page,
@@ -236,110 +234,6 @@ def run_pca(
     return batch_counter, total_vectors
 
 
-def run_kmeans(
-    sqlconn: sqlite3.Connection,
-    namespace: str,
-    n_clusters: int = 100,
-    batch_size: int = 10_000,
-    tracker: Optional[ProgressTracker] = None,
-) -> None:
-    """Cluster the PCA-reduced vectors and persist cluster assignments.
-
-    Args:
-        sqlconn: SQLite database connection
-        namespace: Namespace to process
-        n_clusters: Number of clusters to create
-        batch_size: Batch size for processing
-        tracker: Optional progress tracker
-        use_incremental: If True, use MiniBatchKMeans for incremental processing.
-                        If False, use standard KMeans (loads all data into memory).
-    """
-    # logger.info("Fetching reduced vectors for K-Means (n_clusters=%s, incremental=%s)",
-    #             n_clusters, use_incremental)
-
-    # if use_incremental:
-    # Use MiniBatchKMeans for incremental processing
-    kmeans = MiniBatchKMeans(
-        n_clusters=n_clusters, random_state=42, batch_size=batch_size
-    )
-    ids = []
-    partial_fit_done = False
-
-    # First pass: partial fit on all batches
-    # logger.info("Performing partial fit on all batches...")
-    for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
-        batch_vectors = []
-        batch_ids = []
-        for row in batch:
-            batch_ids.append(row["page_id"])
-            vectors = np.frombuffer(row["reduced_vector"], dtype=np.float32)
-            batch_vectors.append(vectors)
-
-        if batch_vectors:
-            batch_matrix = np.vstack(batch_vectors)
-            if not partial_fit_done:
-                kmeans.partial_fit(batch_matrix)
-                partial_fit_done = True
-            else:
-                kmeans.partial_fit(batch_matrix)
-
-            ids.extend(batch_ids)
-        tracker.update(1) if tracker else None
-
-    if not ids:
-        logger.warning("No reduced vectors found - aborting K-Means.")
-        return
-
-    # Second pass: predict on batches to get cluster assignments
-    # logger.info("Predicting cluster assignments...")
-    cluster_ids = []
-    for batch in _batch_iterator(sqlconn, namespace, ["reduced_vector"], batch_size):
-        batch_vectors = []
-        batch_ids = []
-        for row in batch:
-            batch_ids.append(row["page_id"])
-            vectors = np.frombuffer(row["reduced_vector"], dtype=np.float32)
-            batch_vectors.append(vectors)
-
-        if batch_vectors:
-            batch_matrix = np.vstack(batch_vectors)
-            batch_cluster_ids = kmeans.predict(batch_matrix)
-            cluster_ids.extend(batch_cluster_ids)
-            ids.extend(batch_ids)
-            tracker.update(1) if tracker else None
-
-    # clear old cluster_info entries
-    cursor = sqlconn.cursor()
-    cursor.execute(
-        "DELETE FROM cluster_info WHERE namespace = :namespace",
-        {'namespace': namespace}
-    )
-
-    # Store cluster ids and initialise cluster_info entries.
-    for page_id, cl_id in zip(ids, cluster_ids):
-        cluster_id_int = int(cl_id)
-        page_id_int = int(page_id)
-        # Direct integer update for cluster_id
-        sqlconn.execute(
-            "UPDATE page_vector SET cluster_id = ? WHERE page_id = ?;",
-            (cluster_id_int, page_id_int),
-        )
-        # Ensure a row exists in cluster_info; centroid will be updated later.
-        logger.debug("INSERTing cluster id %d into namespace '%s'", cluster_id_int, namespace)
-        sqlconn.execute(
-            "INSERT OR IGNORE INTO cluster_info (cluster_id, namespace) VALUES (?, ?);",
-            (cluster_id_int, namespace),
-        )
-    sqlconn.commit()
-
-    # Save cluster centroids as BLOB
-    # logger.info("Saving cluster centroids...")
-    for cluster_id in range(n_clusters):
-        centroid = kmeans.cluster_centers_[cluster_id]
-        update_cluster_centroid(cluster_id, namespace, centroid, sqlconn)
-    # logger.info("K-Means clustering completed and assignments stored.")
-
-
 def run_umap_per_cluster(
     sqlconn: sqlite3.Connection,
     namespace: str,
@@ -378,11 +272,7 @@ def run_umap_per_cluster(
         for pid, vec in zip(page_ids, three_space_vectors):
             update_three_d_vector_for_page(namespace, pid, vec.tolist(), sqlconn)
         # Update centroid in cluster_info.
-        centroid = three_space_vectors.mean(axis=0).tolist()
-        sqlconn.execute(
-            "UPDATE cluster_info SET centroid_3d = ? WHERE cluster_id = ?",
-            (three_d_vector_to_text(np.array(centroid).astype(np.float32)), cluster_id),
-        )
+        # centroid = three_space_vectors.mean(axis=0).tolist()
         tracker.update(cluster_size) if tracker else None
         processed += 1
     sqlconn.commit()

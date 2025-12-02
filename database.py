@@ -1,16 +1,15 @@
-from enum import StrEnum
 import json
 import os
 import sqlite3
 import logging
 from dataclasses import asdict, fields
-from typing import Iterable, Iterator, Optional, Type, TypeVar, List
+from typing import Iterable, Iterator, Optional, Type, TypeVar
 
 import numpy as np
 
 from numpy.typing import NDArray
 
-from classes import Chunk, ClusterTreeNode, Page, PageContent, PageVectors, Vector3D, ClusterNodeTopics
+from classes import Chunk, ClusterTreeNode, Page, PageContent, ClusterNodeTopics
 
 # logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,17 +70,6 @@ def ensure_tables(sqlconn: sqlite3.Connection):
     SELECT 'enwiki_namespace_0', page_id, embedding_vector, reduced_vector, cluster_id, NULL, three_d_vector
     FROM page_vector;
     """
-    cluster_info_table_sql = """
-        CREATE TABLE IF NOT EXISTS cluster_info (
-            cluster_id INTEGER NOT NULL,
-            namespace TEXT NOT NULL,
-            centroid_3d TEXT,         -- JSON "[x, y, z]"
-            centroid_vector BLOB,     -- Full centroid vector as float32 bytes
-            cluster_name TEXT,
-            cluster_description TEXT,
-            PRIMARY KEY (cluster_id, namespace)
-        );
-        """
     cluster_tree_table_sql = """
         CREATE TABLE IF NOT EXISTS cluster_tree (
             namespace TEXT,
@@ -103,7 +91,6 @@ def ensure_tables(sqlconn: sqlite3.Connection):
         sqlconn.execute(chunk_log_table_sql)
         sqlconn.execute(page_log_table_sql)
         sqlconn.execute(page_vector_table_sql)
-        sqlconn.execute(cluster_info_table_sql)
         sqlconn.execute(cluster_tree_table_sql)
         # Index for fast cluster lookup
         sqlconn.execute(
@@ -122,11 +109,6 @@ def ensure_tables(sqlconn: sqlite3.Connection):
     except sqlite3.Error as e:
         logger.error(f"Failed to create tables: {e}")
         raise
-
-
-class VectorType(StrEnum):
-    EMBEDDING = "embedding_vector"
-    REDUCED = "reduced_vector"
 
 
 _sqlconns = {}
@@ -174,17 +156,6 @@ def _row_to_dataclass(row: sqlite3.Row, cls: Type[T]) -> T:
     field_names = {f.name for f in fields(cls)}  # type: ignore
     relevant = {k: v for k, v in col_dict.items() if k in field_names}
     return cls(**relevant)  # type: ignore[arg-type]
-
-
-def get_any_page(sqlconn: sqlite3.Connection) -> Optional[Page]:
-    select_a_page_sql = """
-        SELECT namespace, page_id, title, chunk_name, url, extracted_at, abstract
-        FROM page_log
-        LIMIT 1
-        """
-    cursor = sqlconn.execute(select_a_page_sql)
-    row = cursor.fetchone()
-    return _row_to_dataclass(row, Page)
 
 
 def get_page_by_id(namespace: str, page_id: int, sqlconn: sqlite3.Connection) -> Optional[Page]:
@@ -263,36 +234,6 @@ def three_d_vector_to_text(vector: Optional[NDArray]) -> Optional[str]:
             return json.dumps([0.0, 0.0, 0.0])  # Fallback to zero vector
 
 
-def upsert_new_page_data(page: Page, sqlconn: sqlite3.Connection) -> None:
-    if page.page_id is None:
-        raise ValueError(f"Tried to upsert page with no page ID. Page contents: {page.to_json}")
-
-    page_data_upsert_sql = """
-        INSERT INTO page_log(namespace, page_id, title, chunk_name, url, extracted_at, abstract)
-        VALUES(:namespace, :page_id, :title, :chunk_name, :url, CURRENT_TIMESTAMP, :abstract)
-        ON CONFLICT(namespace, page_id) DO UPDATE
-        SET title = :title,
-            chunk_name = :chunk_name,
-            url = :url,
-            extracted_at = CURRENT_TIMESTAMP,
-            abstract = :abstract
-        """
-
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(page_data_upsert_sql, asdict(page))
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as ex:
-            logger.error(
-                f"Failed to roll back sql transaction while handling another error: {ex}"
-            )
-        logger.error(f"Failed to upsert page data for page {page.page_id}: {e}")
-        raise
-
-
 def upsert_new_pages_in_batch(pages: list[Page], sqlconn: sqlite3.Connection, batch_size: int = 1000):
     sql = """
       INSERT INTO page_log(namespace, page_id, title, chunk_name, url, extracted_at, abstract)
@@ -340,46 +281,6 @@ def upsert_new_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
         raise
 
 
-def update_chunk_data(chunk: Chunk, sqlconn: sqlite3.Connection) -> None:
-    update_sql = """
-        UPDATE chunk_log
-        SET chunk_archive_path = :chunk_archive_path,
-            chunk_extracted_path = :chunk_extracted_path,
-            downloaded_at = :downloaded_at,
-            unpacked_at = :unpacked_at
-        WHERE chunk_name = :chunk_name AND namespace = :namespace
-        """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(update_sql, asdict(chunk))
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as ex:
-            logger.error(
-                f"Failed to roll back sql transaction while handling another error: {ex}"
-            )
-        logger.error(f"Failed to update chunk data for chunk {chunk.chunk_name}: {e}")
-        raise
-
-
-def get_chunk_data(namespace: str, chunk_name: str, sqlconn: sqlite3.Connection) -> Optional[Chunk]:
-    select_sql = """
-        SELECT chunk_name, namespace, chunk_archive_path, chunk_extracted_path, downloaded_at, completed_at
-        FROM chunk_log
-        WHERE chunk_name = :chunk_name AND namespace = :namespace
-        LIMIT 1
-        """
-    cursor = sqlconn.execute(select_sql, {"chunk_name": chunk_name, "namespace": namespace})
-    row = cursor.fetchone()
-    if row:
-        return _row_to_dataclass(row, Chunk)
-    else:
-        logger.warning("No chunk found in namespace %s with chunk_name %s", namespace, chunk_name)
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Vector storage helper utilities (new for dimensionality processing)
 # ---------------------------------------------------------------------------
@@ -397,79 +298,6 @@ def get_embedding_count(namespace: str, sqlconn: sqlite3.Connection) -> int:
     cursor = sqlconn.execute(select_sql, {"namespace": namespace})
     row = cursor.fetchone()
     return row[0]
-
-
-def get_reduced_vector_count(namespace: str, sqlconn: sqlite3.Connection) -> int:
-
-    select_sql = """
-        SELECT COUNT(reduced_vector)
-        FROM page_vector
-        WHERE reduced_vector IS NOT NULL
-        AND namespace = :namespace
-    """
-
-    cursor = sqlconn.execute(select_sql, {"namespace": namespace})
-    row = cursor.fetchone()
-    return row[0]
-
-
-def get_page_vectors(
-    namespace: str,
-    page_id: int,
-    sqlconn: sqlite3.Connection
-) -> Optional[PageVectors]:
-    select_sql = """
-        SELECT page_id, embedding_vector, reduced_vector, cluster_id, three_d_vector
-        FROM page_vector
-        WHERE namespace = ? AND page_id = ?
-        LIMIT 1
-        """
-    cursor = sqlconn.execute(select_sql, (namespace, page_id,))
-    row = cursor.fetchone()
-    if row:
-        return _row_to_dataclass(row, PageVectors)
-    else:
-        logger.warning("No page vectors found in namespace %s with %d", namespace, page_id)
-        return None
-
-
-def store_vector(
-    namespace: str,
-    page_id: int,
-    column: VectorType,
-    np_array: NDArray,
-    sqlconn: sqlite3.Connection
-) -> None:
-    """
-    Serialise a NumPy array as float32 bytes and store it in *column*.
-    """
-
-    blob = np_array.astype(np.float32).tobytes()
-    sql = f"UPDATE page_vector SET {column} = :blob WHERE namespace = :namespace AND page_id = :page_id"
-    logger.debug("SQL update statement: %s", sql)
-    try:
-        sqlconn.execute(sql, {"blob": blob, "page_id": page_id, "namespace": namespace})
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        logger.error("Failed to store blob in namespace %s for page %d: %s", namespace, page_id, e)
-        raise
-
-
-def store_three_d_vector(
-    namespace: str, page_id: int, vector: Vector3D, sqlconn: sqlite3.Connection
-) -> None:
-    """Serialise *data* to JSON and store it in *column*.
-
-    Currently used for ``three_d_vector`` (JSON array ``[x, y, z]``).
-    """
-    json_str = json.dumps(vector)
-    sql = "UPDATE page_vector SET three_d_vector = ? WHERE namespace = ? AND page_id = ?"
-    try:
-        sqlconn.execute(sql, (json_str, namespace, page_id))
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        logger.error("Failed to store JSON in namespace %s for page %d: %s", namespace, page_id, e)
-        raise
 
 
 def get_page_reduced_vectors(
@@ -491,35 +319,6 @@ def get_page_reduced_vectors(
         vector_blob = row["reduced_vector"]
         vector = bytes_to_numpy(vector_blob)
         yield (page_id, vector)
-
-
-def update_embeddings_for_page(
-    namespace: str, page_id: int, embedding_vector: NDArray, sqlconn: sqlite3.Connection
-) -> None:
-    # convert numpy arrays to bytes for storage
-    embedding_vector_bytes = numpy_to_bytes(embedding_vector)
-    prepared_data = {"namespace": namespace, "page_id": page_id, "embedding_vector": embedding_vector_bytes}
-    update_page_vector_sql = """
-        INSERT INTO page_vector (namespace, page_id, embedding_vector)
-        VALUES (:namespace, :page_id, :embedding_vector)
-        ON CONFLICT(namespace, page_id) DO
-        UPDATE SET embedding_vector = :embedding_vector WHERE page_id = :page_id;
-        """
-
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(update_page_vector_sql, prepared_data)
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(
-                f"Failed to roll back sql transaction while handling another error: {e1}"
-            )
-            pass
-        logger.exception(f"Failed to update embedding vector for page {page_id}: {e}")
-        raise
 
 
 def upsert_embeddings_in_batch(
@@ -553,30 +352,6 @@ def upsert_embeddings_in_batch(
             sqlconn.commit()
     except sqlite3.Error:
         sqlconn.rollback()
-        raise
-
-
-def update_reduced_vector_for_page(
-    page_id: int, reduced_vector: NDArray, sqlconn: sqlite3.Connection
-) -> None:
-    # convert numpy arrays to bytes for storage
-    reduced_vector_bytes = numpy_to_bytes(reduced_vector)
-    prepared_data = {"page_id": page_id, "reduced_vector": reduced_vector_bytes}
-    update_page_vector_sql = "UPDATE page_vector SET reduced_vector = :reduced_vector WHERE page_id = :page_id;"
-
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(update_page_vector_sql, prepared_data)
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(
-                f"Failed to roll back sql transaction while handling another error: {e1}"
-            )
-            pass
-        logger.exception(f"Failed to update reduced vector for page {page_id}: {e}")
         raise
 
 
@@ -660,33 +435,6 @@ def update_three_d_vector_for_page(
             )
             pass
         logger.exception(f"Failed to update three_d_vector for page {page_id}: {e}")
-        raise
-
-
-def update_cluster_centroid(
-    cluster_id: int,
-    namespace: str,
-    centroid_vector: NDArray,
-    sqlconn: sqlite3.Connection,
-) -> None:
-    centroid_blob = numpy_to_bytes(centroid_vector)
-    try:
-        sqlconn.execute(
-            "UPDATE cluster_info SET centroid_vector = ? WHERE cluster_id = ? AND namespace = ?",
-            (centroid_blob, int(cluster_id), namespace),
-        )
-        sqlconn.commit()
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(
-                f"Failed to roll back sql transaction while handling another error: {e1}"
-            )
-            pass
-        logger.exception(
-            f"Failed to update cluster centroid for cluster {cluster_id} in namespace {namespace}: {e}"
-        )
         raise
 
 
@@ -817,69 +565,6 @@ def update_cluster_tree_child_count(
         raise
 
 
-def _row_to_ctn_dict(row) -> dict:
-    result = dict()
-    for key in ["node_id", "namespace", "parent_id", "child_count", "depth", "doc_count",
-                "first_label", "final_label"]:
-        result[key] = row[key]
-    result['centroid'] = bytes_to_numpy(row['centroid']) if row['centroid'] else None
-    result['top_terms'] = json.loads(row['top_terms']) if row['top_terms'] else None
-    result['sample_doc_ids'] = json.loads(row['sample_doc_ids']) if row['sample_doc_ids'] else None
-    return result
-
-
-def get_cluster_tree_nodes_by_parent(
-    namespace: str,
-    parent_id: Optional[int],
-    sqlconn: sqlite3.Connection
-) -> List[ClusterTreeNode]:
-    """Get all cluster_tree nodes with the specified parent_id."""
-    sql = """
-        SELECT
-            node_id, namespace, parent_id, child_count, depth, centroid, doc_count, top_terms, sample_doc_ids,
-            first_label, final_label
-        FROM cluster_tree
-        WHERE namespace = ? AND parent_id = ?
-        ORDER BY node_id ASC
-        """
-    cursor = sqlconn.execute(sql, (namespace, parent_id,))
-    rows = cursor.fetchall()
-    return [ClusterTreeNode(**_row_to_ctn_dict(row)) for row in rows]
-
-
-def get_cluster_tree_node_by_id(
-    namespace: str,
-    node_id: int,
-    sqlconn: sqlite3.Connection
-) -> Optional[ClusterTreeNode]:
-    """Get a cluster_tree node by its node_id."""
-    sql = """
-        SELECT
-            node_id, namespace, parent_id, child_count, depth, centroid, doc_count, top_terms, sample_doc_ids,
-            first_label, final_label
-        FROM cluster_tree
-        WHERE namespace = ? AND node_id = ?
-        LIMIT 1
-        """
-    cursor = sqlconn.execute(sql, (namespace, node_id,))
-    row = cursor.fetchone()
-    return ClusterTreeNode(**_row_to_ctn_dict(row)) if row else None
-
-
-def get_cluster_tree_root_nodes(sqlconn: sqlite3.Connection) -> List[ClusterTreeNode]:
-    """Get all root nodes (nodes with no parent) from cluster_tree."""
-    sql = """
-        SELECT namespace, node_id, parent_id, depth, centroid, doc_count, top_terms,
-                sample_doc_ids, child_count, first_label, final_label
-        FROM cluster_tree
-        WHERE parent_id IS NULL
-        ORDER BY namespace ASC, node_id ASC
-        """
-    cursor = sqlconn.execute(sql)
-    rows = cursor.fetchall()
-    return [ClusterTreeNode(**_row_to_ctn_dict(row)) for row in rows]
-
-
 def get_cluster_tree_max_node_id(sqlconn: sqlite3.Connection) -> int:
     """Get the maximum node_id from cluster_tree."""
     sql = "SELECT MAX(node_id) FROM cluster_tree"
@@ -997,85 +682,6 @@ def delete_cluster_tree(sqlconn: sqlite3.Connection, namespace: str):
         raise
 
 
-def get_leaf_cluster_node_count(sqlconn: sqlite3.Connection, namespace: str) -> int:
-    """Get the count of the number of leaf cluster nodes that have pages"""
-    sql = """
-        SELECT COUNT(distinct cluster_node_id)
-        FROM page_vector
-        WHERE namespace = ?
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace,))
-        row = cursor.fetchone()
-        return row[0]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to count leaf cluster nodes for namespace {namespace}: {e}")
-        raise
-
-
-def get_leaf_cluster_node_ids(sqlconn: sqlite3.Connection, namespace: str) -> list[int]:
-    """Get the list of leaf cluster node ids that have pages"""
-    sql = """
-        SELECT distinct cluster_node_id
-        FROM page_vector
-        WHERE namespace = ?
-        ORDER BY cluster_node_id ASC
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace,))
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get leaf cluster node ids for namespace {namespace}: {e}")
-        raise
-
-
-def get_leaf_cluster_node_ids_missing_flag(sqlconn: sqlite3.Connection,
-                                           namespace: str,
-                                           flag_column: str) -> list[int]:
-    """
-    Get the list of leaf cluster node ids that have pages
-    and that have a cluster tree flag column with NULL value
-    """
-    sql = f"""
-        SELECT distinct pv.cluster_node_id
-        FROM page_vector pv
-        INNER JOIN cluster_tree ct ON pv.namespace = ct.namespace
-            AND pv.cluster_node_id = ct.node_id
-        WHERE pv.namespace = ?
-        AND ct.{flag_column} IS NULL
-        ORDER BY cluster_node_id ASC
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace,))
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get leaf cluster node ids for namespace {namespace}: {e}")
-        raise
-
-
 def get_pages_in_cluster(sqlconn: sqlite3.Connection, namespace: str, node_id: int) -> list[Page]:
     """Get the list of page_ids for the given cluster node"""
     sql = """
@@ -1140,50 +746,6 @@ def get_pages_in_all_clusters(sqlconn: sqlite3.Connection,
             logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
             pass
         logger.exception(f"Failed to get pages for all clusters in namespace {namespace}: {e}")
-        raise
-
-
-def get_pages_in_all_clusters_missing_flag(sqlconn: sqlite3.Connection,
-                                           namespace: str,
-                                           flag_column: str,
-                                           ) -> dict[int, list[tuple[int, str, str]]]:
-    """Get the map of node_id to tuple of (page_id, title, abstract) for the given namespace"""
-    sql = f"""
-        SELECT pv.cluster_node_id, pl.page_id, pl.title, pl.abstract
-        FROM page_log pl
-        INNER JOIN page_vector pv ON pl.namespace = pv.namespace AND pl.page_id = pv.page_id
-        INNER JOIN cluster_tree ct ON pv.namespace = ct.namespace
-            AND pv.cluster_node_id = ct.node_id
-        WHERE pl.namespace = ?
-        AND ct.{flag_column} IS NULL
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace, ))
-        results = dict()
-        while True:
-            rows = cursor.fetchmany(100)
-            if not rows:
-                break
-            for row in rows:
-                node_id = row[0]
-                page_id = row[1]
-                title = row[2]
-                abstract = row[3]
-
-                if node_id not in results:
-                    results[node_id] = list()
-                results[node_id].append((page_id, title, abstract, ))
-        return results
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get pages for clusters in namespace {namespace} "
-                         f"with null flag column {flag_column}: {e}")
         raise
 
 
@@ -1288,89 +850,6 @@ def get_cluster_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> lis
         raise
 
 
-def get_cluster_node_ids_with_missing_first_topics(sqlconn: sqlite3.Connection, namespace: str) -> list[int]:
-    """
-    Find the cluster nodes that are missing topics. They tend to be near the root of the tree.
-    Higher depth nodes should be listed first, so that they can be processed earlier,
-    to provide input to lower depth nodes.
-    """
-    sql = """
-        SELECT node_id
-        FROM cluster_tree
-        WHERE namespace = ?
-        AND first_label IS NULL
-        ORDER BY depth DESC
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace,))
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get cluster node ids with missing first topics for namespace {namespace}: {e}")
-        raise
-
-
-def get_cluster_node_ids_with_missing_final_topics(sqlconn: sqlite3.Connection, namespace: str) -> list[int]:
-    """
-    Find the cluster nodes that are missing topics. They tend to be near the root of the tree.
-    Higher depth nodes should be listed first, so that they can be processed earlier,
-    to provide input to lower depth nodes.
-    """
-    sql = """
-        SELECT node_id
-        FROM cluster_tree
-        WHERE namespace = ?
-        AND final_label  IS NULL
-        ORDER BY depth DESC
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace,))
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get cluster node ids with missing first topics for namespace {namespace}: {e}")
-        raise
-
-
-def get_cluster_children_topics(sqlconn: sqlite3.Connection, namespace: str, node_id: int) -> list[str]:
-    """Get the topics of the cluster node's children"""
-    sql = """
-        SELECT COALESCE(final_label, first_label) as label
-        FROM cluster_tree
-        WHERE namespace = ?
-        AND parent_id = ?
-        AND label IS NOT NULL
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace, node_id, ))
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to get cluster children topics for cluster {node_id} in namespace {namespace}: {e}")
-        raise
-
-
 def remove_existing_cluster_topics(sqlconn: sqlite3.Connection, namespace: str) -> None:
     """Remove existing topics for cluster """
     sql = """
@@ -1390,57 +869,6 @@ def remove_existing_cluster_topics(sqlconn: sqlite3.Connection, namespace: str) 
             logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
             pass
         logger.exception(f"Failed to remove labels on cluster tree for namespace {namespace}: {e}")
-        raise
-
-
-def get_cluster_root_node_ids(sqlconn: sqlite3.Connection, namespace: str) -> list[int]:
-    """Find root nodes if any. There should be at most 1, but who knows what might have gone wrong here."""
-    sql = """
-    SELECT node_id
-    FROM cluster_tree
-    WHERE namespace = ? AND parent_id IS NULL;
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace, ))
-        return [row[0] for row in cursor.fetchall()]
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.exception(f"Failed to find root nodes on cluster tree for namespace {namespace}: {e}")
-        raise
-
-
-def get_clusters_for_pass(
-    sqlconn: sqlite3.Connection,
-    namespace: str,
-    flag_column: str,
-    limit: Optional[int],
-) -> list[int]:
-    """Assuming 'resume' mode, get clusters for a specific pass based on progress and limit."""
-    limit_clause = f" LIMIT {limit}" if limit else ""
-    sql = f"""
-        SELECT node_id FROM cluster_tree
-        WHERE namespace = ?
-        AND {flag_column} IS NULL
-        {limit_clause};
-    """
-    try:
-        cursor = sqlconn.cursor()
-        cursor.execute(sql, (namespace, ))
-        result = [row[0] for row in cursor.fetchall()]
-        return result
-    except sqlite3.Error as e:
-        try:
-            sqlconn.rollback()
-        except Exception as e1:
-            logger.error(f"Failed to roll back sql transaction while handling another error: {e1}")
-            pass
-        logger.error(f"Failed to get clusters for pass for namespace `{namespace}`"
-                     f" and flag_column `{flag_column}`: {e}")
         raise
 
 

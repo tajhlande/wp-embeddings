@@ -17,7 +17,6 @@ from database import (
     get_all_cluster_nodes_for_topic_labeling,
     get_embedding_count,
     get_pages_in_all_clusters,
-    get_reduced_vector_count,
     get_sql_conn,
     ensure_tables,
     get_page_ids_needing_embedding_for_chunk,
@@ -42,7 +41,7 @@ from index_pages import (
 from languages import get_language_for_namespace
 from progress_utils import ProgressTracker
 from topic_discovery import TopicDiscovery
-from transform import run_kmeans, run_pca, run_umap_per_cluster, run_recursive_clustering
+from transform import run_pca, run_umap_per_cluster, run_recursive_clustering
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -87,8 +86,6 @@ class Result(IntEnum):
 
 
 REQUIRED_NAMESPACE_ARGUMENT = Argument(name="namespace", type="string", required=True,
-                                       description="The wiki namespace, e.g. enwiki_namespace_0")
-OPTIONAL_NAMESPACE_ARGUMENT = Argument(name="namespace", type="string", required=False,
                                        description="The wiki namespace, e.g. enwiki_namespace_0")
 OPTIONAL_CHUNK_LIMIT_ARGUMENT = Argument(name="limit", type="integer", required=False, default=1,
                                          description="Number of chunks to process")
@@ -925,61 +922,6 @@ MIN_SILHOUETTE_ARGUMENT = Argument(name="min-silhouette", type="float", required
                                    description="Minimum silhouette score to continue clustering")
 CLUSTER_COUNT_ARGUMENT = Argument(name="clusters", type="integer", required=False, default=10_000,
                                   description="Number of clusters to process")
-
-
-class ClusterCommand(Command):
-    """Cluster reduced vectors with k-means."""
-
-    def __init__(self):
-        super().__init__(
-            name="cluster",
-            description="Cluster reduced vectors with k-means",
-            expected_args=[REQUIRED_NAMESPACE_ARGUMENT, CLUSTER_COUNT_ARGUMENT, BATCH_SIZE_ARGUMENT]
-        )
-
-    def execute(self, args: Dict[str, Any]) -> tuple[Result, str]:
-        try:
-            namespace = args[REQUIRED_NAMESPACE_ARGUMENT.name]
-
-            sqlconn = get_sql_conn(namespace)
-            ensure_tables(sqlconn)
-
-            num_clusters = args.get(CLUSTER_COUNT_ARGUMENT.name, CLUSTER_COUNT_ARGUMENT.default)
-            batch_size = args.get(BATCH_SIZE_ARGUMENT.name, BATCH_SIZE_ARGUMENT.default)
-
-            estimated_vector_count = get_reduced_vector_count(namespace, sqlconn)
-            estimated_batch_count = estimated_vector_count // batch_size + 1
-
-            if estimated_vector_count < batch_size:
-                print(
-                    f"Reducing batch size to match estimated vector count: {estimated_vector_count}"
-                )
-                batch_size = estimated_vector_count
-
-            print(f"Clustering to {num_clusters} clusters in batches of {batch_size} in namespace {namespace}")
-
-            with ProgressTracker(
-                "K-means Clustering (two pass)",
-                unit="batches",
-                total=estimated_batch_count * 2,
-            ) as tracker:
-                run_kmeans(
-                    sqlconn,
-                    namespace=namespace,
-                    n_clusters=num_clusters,
-                    batch_size=batch_size,
-                    tracker=tracker,
-                )
-
-            return (
-                Result.SUCCESS,
-                f"{CHECK} Clustered reduced page embeddings in namespace {namespace} using incremental K-means"
-            )
-        except Exception as e:
-            logger.error(f"Failed to cluster embeddings: {e}")
-            return Result.FAILURE, f"{X} Failed to cluster embeddings: {e}"
-
-
 OPTIONAL_CLUSTER_LIMIT_ARGUMENT = Argument(name="limit", type="integer", required=False,
                                            description="Number of clusters to process")
 
@@ -1422,16 +1364,6 @@ class StatusCommand(Command):
                       )
 
                 # count and show cluster stats
-                cluster_count_sql = """
-                    SELECT COUNT(*)
-                    FROM cluster_info
-                    WHERE namespace = ?;
-                """
-                cluster_count_cursor = sqlconn.execute(cluster_count_sql, (namespace, ))
-                cluster_count = cluster_count_cursor.fetchone()[0]
-
-                print(f"    Clusters: {cluster_count} total")
-
                 tree_cluster_count_sql = """
                     SELECT COUNT(*) as the_count,
                         SUM(CASE WHEN first_label IS NOT NULL THEN 1 ELSE 0 END) as first_label_count,
@@ -1522,7 +1454,6 @@ class CommandInterpreter:
         self.parser.register_command(UnpackProcessChunksCommand())
         self.parser.register_command(EmbedPagesCommand())
         self.parser.register_command(ReduceCommand())
-        self.parser.register_command(ClusterCommand())
         self.parser.register_command(RecursiveClusterCommand())
         self.parser.register_command(ProjectCommand())
         self.parser.register_command(TopicsCommand())

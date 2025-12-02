@@ -2,7 +2,6 @@ import contextlib
 import io
 import json
 import logging
-import os
 import sqlite3
 import tarfile
 from typing import Optional
@@ -86,30 +85,6 @@ def revoke_token_on_exit(auth_client: AuthClient, refresh_token: str):
             auth_client.revoke_token(refresh_token)
         except Exception as e:
             logger.error(f"Failed to revoke token: {e}")
-
-
-def find_chunks(
-    api_client: Client, sqlconn: sqlite3.Connection, request: Request, namespace: str
-):
-    try:
-        # "enwiki_namespace_0"
-        snapshot_json = api_client.get_snapshot(namespace, request)
-    except Exception as e:
-        logger.exception(f"Failed to get snapshot: {e}")
-        return
-
-    try:
-        for chunk_name in snapshot_json["chunks"]:
-            logger.info(f"Chunk: {chunk_name}")
-            chunk = Chunk(chunk_name=chunk_name, namespace=namespace)
-            upsert_new_chunk_data(chunk, sqlconn)
-            # logger.info(f"Name: {chunk_json['date_modified']}")
-            # logger.info(f"Abstract: {chunk_json['identifier']}")
-            # logger.info(f"Description: {chunk_json['size']}")
-    except Exception as e:
-        logger.exception(f"Failed to process snapshot data: {e}")
-        logger.info(f"Snapshot JSON:\n{json.dumps(snapshot_json, indent=2)}")
-        return
 
 
 def download_chunk(
@@ -282,81 +257,6 @@ def parse_chunk_file(
     except Exception as e:
         logger.exception(f"Error parsing chunk file: {e}")
         raise
-
-
-def fetch_and_extract():
-
-    auth_client, refresh_token, access_token = get_enterprise_auth_client()
-
-    with revoke_token_on_exit(auth_client, refresh_token):
-        api_client = get_enterprise_api_client(access_token)
-
-        # to get metadata of all available snapshots
-
-        # try:
-        #     snapshots = api_client.get_snapshots(Request())
-        # except Exception as e:
-        #     logger.exception(f"Failed to get snapshots: {e}")
-        #     return
-
-        # for content in snapshots:
-        #     logger.info(f"Name: {content['date_modified']}")
-        #     logger.info(f"Abstract: {content['identifier']}")
-        #     logger.info(f"Description: {content['size']}")
-
-        # To get metadata on an single SC snapshot using request parameters
-        request = Request(filters=[Filter(field="in_language.identifier", value="en")])
-
-        # try:
-        #     ss_json = api_client.get_structured_snapshot("enwiki_namespace_0", request)
-        # except Exception as e:
-        #     logger.exception(f"Failed to get structured content")
-        #     return
-
-        # try:
-        #     head = api_client.head_structured_snapshot("enwiki_namespace_0")
-        # except Exception as e:
-        #     logger.exception(f"Failed to head structured content")
-        #     return
-        # logger.info(f"Head of structured snapshot:\n{json.dumps(head, indent=2)}")
-
-        try:
-            chunk_info_json = api_client.get_chunk(
-                "enwiki_namespace_0", "enwiki_namespace_0_chunk_0", request
-            )
-        except Exception as e:
-            logger.exception(f"Failed to get chunk info: {e}")
-            return
-        logger.info(f"Chunk info:\n{json.dumps(chunk_info_json, indent=2)}")
-
-
-def process_one_chunk():
-    # auth_client, refresh_token, access_token = get_enterprise_auth_client()
-
-    # with revoke_token_on_exit(auth_client, refresh_token):
-    #     api_client = get_enterprise_api_client(access_token)
-
-    namespace = "enwiki_namespace_0"
-    chunk_name = "enwiki_namespace_0_chunk_0"
-    chunk_file_path = f"downloaded/{namespace}/{chunk_name}.tar.gz"
-
-    # download_chunk(api_client, namespace, chunk_name, chunk_file_path)
-
-    logger.info(f"Path for extracted chunk archive: {chunk_file_path}")
-    extracted_chunk_path = f"extracted/{namespace}"
-
-    extracted_file_name = extract_single_file_from_tar_gz(
-        chunk_file_path, extract_to=extracted_chunk_path
-    )
-    if extracted_file_name:
-        logger.info(f"Extracted chunk file: {extracted_file_name}")
-    else:
-        logger.error("Failed to extract file from chunk")
-
-    sqlconn = get_sql_conn(namespace)
-    parse_chunk_file(
-        sqlconn, namespace, chunk_name, os.path.join(extracted_chunk_path, extracted_file_name)
-    )
 
 
 def get_chunk_info_for_namespace(

@@ -1,27 +1,19 @@
 import logging
 import os
 import sqlite3
-import time
 
-from contextlib import contextmanager
 from typing import Optional
 
-import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
 
 from chromadb.api.types import EmbeddingFunction, Embeddings
-from chromadb.api.models.Collection import Collection as ChromaCollection
 import openai
 
 from classes import Page
 from database import (
-    bytes_to_numpy,
-    get_any_page,
     get_page_by_id,
     get_page_ids_needing_embedding_for_chunk,
-    get_page_vectors,
     get_sql_conn,
-    update_embeddings_for_page,
     upsert_embeddings_in_batch,
 )
 from progress_utils import ProgressTracker
@@ -50,27 +42,6 @@ def get_embedding_function(
         api_version=openai_api_version,
         model_name=model_name,
     )
-
-
-def init_chroma_db(
-    collection_name: str, collection_path: str, embedding_function: EmbeddingFunction
-) -> tuple[chromadb.PersistentClient, ChromaCollection]:  # type: ignore
-    # Locate and intiialize ChromaDB vector store if needed
-    logger.debug("Initializing ChromaDB client for path %s", collection_path)
-    chroma_client = chromadb.PersistentClient(path=collection_path)
-    logger.debug("Looking for Chroma collection %s", collection_name)
-    try:
-        collection = chroma_client.get_collection(
-            name=collection_name, embedding_function=embedding_function
-        )
-        logger.debug("Found existing Chroma collection at %s", collection_path)
-    except Exception as e:
-        logger.warning(f"Collection {collection_name} not found, creating new one: {e}")
-        collection = chroma_client.create_collection(
-            name=collection_name, embedding_function=embedding_function
-        )
-
-    return chroma_client, collection
 
 
 def compute_page_embeddings(
@@ -103,61 +74,6 @@ def compute_page_embeddings(
         raise
 
 
-def test_one_embedding():
-    sqlconn = get_sql_conn("enwiki_namespace_0")
-    embedding_model_name, embedding_model_api_url, embedding_model_api_key = (
-        get_embedding_model_config()
-    )
-    embedding_function = get_embedding_function(
-        model_name=embedding_model_name,
-        openai_compatible_url=embedding_model_api_url,
-        openai_api_key=embedding_model_api_key,
-    )
-
-    page: Optional[Page] = get_any_page(sqlconn)
-    assert page is not None, "No page found in database for testing."
-
-    embeddings = compute_page_embeddings(page, embedding_function)
-    # logger.debug(f"Computed embeddings:\n{embeddings}")
-    # logger.debug(f"Vector count: {len(embeddings)}")
-    # n = 0
-    # for vector in embeddings:
-    #     n += 1
-    #     logger.info(f"Vector {n} length: {len(vector)}.")
-
-    # store the embedding
-    if len(embeddings) > 1:
-        logger.warning("More than one embedding returned, only storing the first one.")
-    embedding = embeddings[0]
-    update_embeddings_for_page(page.namespace, page.page_id, embedding, sqlconn)
-
-    # retrieve the embedding
-    retrieved_page_vectors = get_page_vectors(page.namespace, page.page_id, sqlconn)
-
-    assert (
-        retrieved_page_vectors is not None
-    ), "No page vectors found after storing embedding."
-    assert (
-        retrieved_page_vectors.embedding_vector is not None
-    ), "Embedding vector was not stored correctly."
-    retrieved_embedding = bytes_to_numpy(retrieved_page_vectors.embedding_vector)
-    assert (
-        retrieved_embedding is not None
-    ), "Failed to convert stored embedding vector from bytes."
-    assert (
-        retrieved_embedding.shape == embedding.shape
-    ), "Stored embedding vector shape does not match."
-    assert (
-        retrieved_embedding == embedding
-    ).all(), "Stored embedding vector data does not match."
-
-
-@contextmanager
-def timer():
-    start_time = time.perf_counter()
-    yield lambda: time.perf_counter() - start_time
-
-
 def compute_embeddings_for_chunk(
     namespace: str,
     chunk_name: str,
@@ -167,35 +83,16 @@ def compute_embeddings_for_chunk(
     tracker: Optional[ProgressTracker] = None,
 ) -> None:
 
-    # logger.info("Computing embeddings for chunk %s", chunk_name)
     page_id_list = get_page_ids_needing_embedding_for_chunk(chunk_name, sqlconn, namespace=namespace)
-    # logger.info("Found %d pages needing embeddings in chunk %s", len(page_id_list), chunk_name)
 
     # Apply limit if specified
     if limit and limit < len(page_id_list):
         page_id_list = page_id_list[:limit]
-        # logger.info("Processing first %d pages (limit applied)", limit)
-    # else:
-    # logger.info("Processing all %d pages", len(page_id_list))
 
     tracker.set_total(len(page_id_list)) if tracker else None
-    # Use progress bar for embedding computation
-    # counter = 0
-    # for page_id in page_id_list:
-    #     page = get_page_by_id(page_id, sqlconn)
-    #     if not page:
-    #         logger.warning("Page with page_id %d not found, skipping.", page_id)
-    #         continue
-    #     embeddings = compute_page_embeddings(page, embedding_function)
-    #     embedding = embeddings[0]
-    #     update_embeddings_for_page(page_id, embedding, sqlconn)
-    #     # logger.debug("Stored embedding for page_id %d", page_id)
-    #     counter += 1
-    #     tracker.update(1) if tracker else None
 
     BUFFER_SIZE = 100
     buffer = []
-    counter = 0
     for page_id in page_id_list:
         page = get_page_by_id(namespace, page_id, sqlconn)
         if not page:
@@ -211,7 +108,6 @@ def compute_embeddings_for_chunk(
             if len(buffer) >= BUFFER_SIZE:
                 upsert_embeddings_in_batch(namespace, buffer, sqlconn, BUFFER_SIZE)
                 tracker.update(len(buffer)) if tracker else None
-                counter += len(buffer)
                 buffer = []
         except Exception:
             logger.exception(f"Exception while computing embedding for page {page.page_id}")
@@ -220,10 +116,6 @@ def compute_embeddings_for_chunk(
     if buffer:
         upsert_embeddings_in_batch(namespace, buffer, sqlconn, BUFFER_SIZE)
         tracker.update(len(buffer)) if tracker else None
-        counter += len(buffer)
-
-    # logger.info("Computed and stored embeddings for %d pages
-    # in chunk %s in %.2f seconds", counter, chunk_name, elapsed())
 
 
 EMBEDDING_MODEL_NAME_KEY = "EMBEDDING_MODEL_NAME"

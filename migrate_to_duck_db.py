@@ -50,17 +50,6 @@ page_vector_table_sql = """
     );
     """
 
-cluster_info_table_sql = """
-    CREATE TABLE IF NOT EXISTS cluster_info (
-        cluster_id INTEGER NOT NULL,
-        namespace TEXT NOT NULL,
-        centroid_3d JSON,         -- JSON "[x, y, z]"
-        centroid_vector FLOAT[],     -- Full centroid vector as float32 bytes
-        cluster_name TEXT,
-        cluster_description TEXT,
-        PRIMARY KEY (namespace, cluster_id)
-    );
-    """
 cluster_tree_table_sql = """
     CREATE TABLE IF NOT EXISTS cluster_tree (
         namespace TEXT,
@@ -82,7 +71,6 @@ print("Building SQL schema")
 duckconn.execute(chunk_log_table_sql)
 duckconn.execute(page_log_table_sql)
 duckconn.execute(page_vector_table_sql)
-duckconn.execute(cluster_info_table_sql)
 duckconn.execute(cluster_tree_table_sql)
 
 

@@ -30,7 +30,6 @@ Available commands:
   unpack - Unpack and process downloaded chunks
   embed - Process remaining pages for embedding computation
   reduce - Reduce dimension of embeddings
-  cluster - Cluster reduced vectors with k-means
   recursive-cluster - Run recursive clustering algorithm to build a tree of clusters
   project - Project reduced vector clusters into 3-space.
   topics - Use an LLM to discover topics for clusters according to their page content.
@@ -49,7 +48,6 @@ Available commands are:
 * **unpack** – Unpack and extract article page titles and abstracts from the snapshot chunks
 * **embed** – Compute embeddings on the page titles and abstracts
 * **reduce** – Reduce the dimensionality of the embeddings
-* **cluster** – Do a single-pass cluster of the reduced vectors with k-means
 * **recursive-cluster** – Run recursive clustering with k-means to build a tree of clusters
 * **project** – Project the single-pass vectors into 3-space
 * **topics** – Use an LLM model to discover topics for clusters according to their page content
@@ -181,7 +179,6 @@ The sqlite3 database has the following tables:
 * **chunk_log** – Name, download path, and other metadata about chunks of the Wikipedia archive that can be or have been downloaded
 * **page_log** – Page ID, title, abstract, and other metadata
 * **page_vector** – Embedding and other computed vectors, plus cluster ID assignments for pages.
-* **cluster_info** – Cluster node info from the `cluster` command
 * **cluster_tree** – Cluster node info from the `recursive-cluster` command
 
 ## Visualization
@@ -204,3 +201,8 @@ This project uses [ruff](https://github.com/astral-sh/ruff) for linting (also fr
 uvx ruff check
 ```
 
+and [vulture]() to help find dead code, though the output must be evaluated by a human.
+
+```bash
+uvx vulture *.py
+```

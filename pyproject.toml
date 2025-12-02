@@ -29,6 +29,7 @@ dev = [
     "black>=25.11.0",
     "flake8-pyproject>=1.2.3",
     "ruff>=0.14.5",
+    "vulture>=2.14",
 ]
 
 [tool.ruff]
